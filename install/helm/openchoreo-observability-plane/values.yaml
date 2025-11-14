@@ -41,21 +41,58 @@ clickstack:
       CREATE DATABASE IF NOT EXISTS telemetry;
       CREATE TABLE IF NOT EXISTS telemetry.logs_mv (
         organization_id String,
-        timestamp DateTime64(9),
-        log String,
-        log_level String,
+        project_id String,
         component_id String,
         environment_id String,
-        project_id String,
         version String,
         version_id String,
+        build_id String,
+        build_uuid String,
+        gateway_vhost String,
+        api_id String,
+        api_version String,
         namespace String,
         pod_id String,
         container_name String,
-        labels_json JSON,
-        log_type String
+        log_type String,
+        log String,
+        log_level String,
+        labels_json String,
+        timestamp DateTime64(9)
       ) ENGINE = MergeTree()
       ORDER BY (organization_id, project_id, component_id, timestamp);
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS build_id String DEFAULT '' AFTER version_id;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS build_uuid String DEFAULT '' AFTER build_id;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS gateway_vhost String DEFAULT '' AFTER build_uuid;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS api_id String DEFAULT '' AFTER gateway_vhost;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS api_version String DEFAULT '' AFTER api_id;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS log String DEFAULT '' AFTER log_type;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS log_level String DEFAULT '' AFTER log;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS labels_json String AFTER log_level;
+      ALTER TABLE telemetry.logs_mv ADD COLUMN IF NOT EXISTS timestamp DateTime64(9) DEFAULT now64(9) AFTER labels_json;
+      DROP VIEW IF EXISTS telemetry.logs_mv_ingest;
+      CREATE MATERIALIZED VIEW telemetry.logs_mv_ingest TO telemetry.logs_mv AS
+      SELECT
+        coalesce(ResourceAttributes['organization.id'], '') AS organization_id,
+        coalesce(ResourceAttributes['project.id'], '') AS project_id,
+        coalesce(ResourceAttributes['component.id'], '') AS component_id,
+        coalesce(ResourceAttributes['environment.id'], '') AS environment_id,
+        coalesce(ResourceAttributes['version'], '') AS version,
+        coalesce(ResourceAttributes['version.id'], '') AS version_id,
+        coalesce(ResourceAttributes['build.id'], '') AS build_id,
+        coalesce(ResourceAttributes['build.uuid'], '') AS build_uuid,
+        coalesce(LogAttributes['gateway_vhost'], '') AS gateway_vhost,
+        coalesce(LogAttributes['api_id'], '') AS api_id,
+        coalesce(LogAttributes['api_version'], '') AS api_version,
+        coalesce(LogAttributes['namespace'], '') AS namespace,
+        coalesce(LogAttributes['pod_id'], '') AS pod_id,
+        coalesce(LogAttributes['container_name'], coalesce(LogAttributes['container'], '')) AS container_name,
+        coalesce(LogAttributes['log_type'], '') AS log_type,
+        Body AS log,
+        SeverityText AS log_level,
+        toJSONString(LogAttributes) AS labels_json,
+        Timestamp AS timestamp
+      FROM telemetry.otel_logs;
 
 # OTLP gateway pushes traces/metrics/logs into ClickStack
 gateway:
