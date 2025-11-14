@@ -35,6 +35,10 @@ var _ = Describe("Manager", Ordered, func() {
 	// Before running the tests, set up the environment by creating the namespace,
 	// installing CRDs, and deploying the controller.
 	BeforeAll(func() {
+		if os.Getenv("E2E_CLICKSTACK") == "true" {
+			Skip("Manager suite disabled while running ClickStack E2E focus")
+		}
+
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
 		_, err := utils.Run(cmd)
@@ -54,6 +58,10 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		if os.Getenv("E2E_CLICKSTACK") == "true" {
+			return
+		}
+
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
@@ -74,6 +82,10 @@ var _ = Describe("Manager", Ordered, func() {
 	// After each test, check for failures and collect logs, events,
 	// and pod descriptions for debugging.
 	AfterEach(func() {
+		if os.Getenv("E2E_CLICKSTACK") == "true" {
+			return
+		}
+
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
 			By("Fetching controller manager pod logs")

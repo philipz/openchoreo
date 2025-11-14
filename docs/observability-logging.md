@@ -89,7 +89,7 @@ Adjust thresholds in `values.yaml -> monitoring.alerts`.
 
 ## 4. E2E / CI Validation
 
-Set `E2E_CLICKSTACK=true` before running `go test ./test/e2e -run ClickStack` to execute the ClickStack integration suite. The suite now:
+Set `E2E_CLICKSTACK=true` before running `go test ./test/e2e -v` to execute the ClickStack integration suite (manager specs auto-skip under this flag). The suite now:
 - Installs the `openchoreo-observability-plane` Helm chart in minimal mode and waits for ClickStack, OTLP gateway, Observer, HyperDX, and collector DaemonSets to become ready.
 - Verifies Grafana dashboards ConfigMaps are published.
 - Sends a synthetic OTLP/HTTP log through the gateway, then queries ClickStack to confirm the record is indexed.

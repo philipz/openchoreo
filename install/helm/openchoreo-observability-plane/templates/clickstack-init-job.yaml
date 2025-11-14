@@ -28,7 +28,7 @@ spec:
               echo "Applying schema"
               cat <<'SQL' | clickhouse-client --host clickstack --port {{ .Values.clickstack.service.port | default 9000 }} --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"
               {{- .Values.clickstack.initSQL.schema | nindent 14 }}
-SQL
+              SQL
           env:
             - name: CLICKHOUSE_USER
               valueFrom:

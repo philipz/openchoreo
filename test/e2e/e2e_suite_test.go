@@ -31,6 +31,8 @@ var (
 	// projectImage is the name of the image which will be build and loaded
 	// with the code source changes to be tested.
 	projectImage = "example.com/choreo:v0.0.1"
+	// clickstackOnlyRun skips the default manager suite bootstrap when running ClickStack-focused E2E.
+	clickstackOnlyRun = os.Getenv("E2E_CLICKSTACK") == "true"
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -44,6 +46,10 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	if clickstackOnlyRun {
+		return
+	}
+
 	By("Ensure that Prometheus is enabled")
 	_ = utils.UncommentCode("config/default/kustomization.yaml", "#- ../prometheus", "#")
 
@@ -95,6 +101,10 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+	if clickstackOnlyRun {
+		return
+	}
+
 	// Teardown Prometheus and CertManager after the suite if not skipped and if they were not already installed
 	if !skipPrometheusInstall && !isPrometheusOperatorAlreadyInstalled {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling Prometheus Operator...\n")

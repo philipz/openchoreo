@@ -55,4 +55,4 @@ This runbook guides platform teams through migrating from the legacy OpenSearch 
 ## 6. Post-Migration Operations
 - Keep `make deploy-observability` in CI to ensure collectors stay applied.
 - Add Grafana alerts to on-call rotations (ingestion lag, compression, query p95).
-- Run E2E ClickStack tests with `E2E_CLICKSTACK=true go test ./test/e2e -run ClickStack` before every release. The suite installs the observability plane Helm chart (minimal mode), validates component readiness, sends synthetic OTLP logs through the gateway, confirms ClickStack queries succeed, and restarts the StatefulSet to verify failover.
+- Run E2E ClickStack tests with `E2E_CLICKSTACK=true go test ./test/e2e -v` before every release. Under this flag the manager specs skip automatically; the ClickStack suite installs the observability plane Helm chart (minimal mode), validates component readiness, sends synthetic OTLP logs through the gateway, confirms ClickStack queries succeed, and restarts the StatefulSet to verify failover.
