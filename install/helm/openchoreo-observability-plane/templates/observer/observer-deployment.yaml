@@ -22,20 +22,28 @@ spec:
         runAsGroup: 65532
         fsGroup: 65532
       initContainers:
-      - name: wait-for-opensearch
-        image: curlimages/curl:latest
+      - name: wait-for-telemetry
+        image: busybox:1.36
         command:
         - /bin/sh
         - -c
         - |
-          echo "Waiting for OpenSearch to be ready..."
-          OPENSEARCH_URL="http://opensearch:9200"
-          echo "Checking OpenSearch at: $OPENSEARCH_URL"
-          until curl -s "$OPENSEARCH_URL/_cluster/health" | grep -q '"status":"green\|yellow"'; do
-            echo "OpenSearch not ready, waiting 10 seconds..."
-            sleep 10
-          done
-          echo "OpenSearch is ready!"
+          set -e
+          BACKEND="{{ .Values.observer.telemetry.backend | default "clickstack" }}"
+          if [ "$BACKEND" = "clickstack" ]; then
+            echo "Waiting for ClickStack service..."
+            until nc -z clickstack {{ .Values.clickstack.service.port | default 9000 }}; do
+              echo "ClickStack not ready, sleeping 10s"
+              sleep 10
+            done
+          else
+            echo "Waiting for OpenSearch service..."
+            until nc -z opensearch 9200; do
+              echo "OpenSearch not ready, sleeping 10s"
+              sleep 10
+            done
+          fi
+          echo "Telemetry backend is reachable."
         securityContext:
           runAsNonRoot: true
           runAsUser: 65532
@@ -55,9 +63,35 @@ spec:
         - name: PORT
           value: "8080"
         - name: LOG_LEVEL
-          value: {{ if .Values.observer }}{{ .Values.observer.logLevel | default "info" | quote }}{{ else }}"info"{{ end }}
+          value: {{ .Values.observer.logLevel | default "info" | quote }}
+        - name: TELEMETRY_BACKEND
+          value: {{ .Values.observer.telemetry.backend | default "clickstack" | quote }}
+        - name: TELEMETRY_DUAL_READ
+          value: {{ ternary "true" "false" (.Values.observer.telemetry.dualRead | default true) | quote }}
+        - name: TELEMETRY_DUAL_SAMPLE_RATE
+          value: "{{ .Values.observer.telemetry.dualSampleRate | default 0.05 }}"
+        - name: CLICKSTACK_HOSTS
+          value: "{{ join "," (default (list "clickstack:9000") .Values.observer.clickstack.hosts) }}"
+        - name: CLICKSTACK_DATABASE
+          value: {{ .Values.observer.clickstack.database | default "telemetry" | quote }}
+        - name: CLICKSTACK_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: clickstack-credentials
+              key: username
+        - name: CLICKSTACK_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: clickstack-credentials
+              key: password
+        - name: HYPERDX_BASE_URL
+          value: {{ .Values.hyperdx.signing.baseUrl | default "" | quote }}
+        - name: HYPERDX_SIGNING_KEY
+          value: {{ .Values.hyperdx.signing.key | default "" | quote }}
+        - name: HYPERDX_TTL
+          value: {{ .Values.hyperdx.signing.ttl | default "15m" | quote }}
         - name: OPENSEARCH_ADDRESS
-          value: "http://opensearch:9200"
+          value: {{ .Values.observer.openSearch.address | default "http://opensearch:9200" | quote }}
         - name: OPENSEARCH_USERNAME
           valueFrom:
             secretKeyRef:

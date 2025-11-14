@@ -1,0 +1,101 @@
+{{- if .Values.migration.shadowWrite.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "openchoreo-observability-plane.fullname" . }}-shadow-write
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "migration") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.shadowWrite.backoffLimit | default 3 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "shadow-write") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "openchoreo-observability-plane.serviceAccountName" . }}
+      containers:
+        - name: shadow-write-enabler
+          image: "{{ .Values.migration.image.repository }}:{{ .Values.migration.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "=== Shadow Write Enablement Job ==="
+              echo "Timestamp: $(date -Iseconds)"
+
+              # Verify ClickStack is healthy
+              echo "Checking ClickStack health..."
+              until clickhouse-client \
+                --host {{ .Values.clickstack.service.name | default "clickstack" }} \
+                --port {{ .Values.clickstack.service.port | default 9000 }} \
+                --user "$CLICKHOUSE_USER" \
+                --password "$CLICKHOUSE_PASSWORD" \
+                -q "SELECT 1"; do
+                echo "ClickStack not ready, sleeping 5s..."
+                sleep 5
+              done
+              echo "✓ ClickStack is healthy"
+
+              # Verify required tables exist
+              echo "Verifying ClickStack schema..."
+              TABLES=$(clickhouse-client \
+                --host {{ .Values.clickstack.service.name | default "clickstack" }} \
+                --port {{ .Values.clickstack.service.port | default 9000 }} \
+                --user "$CLICKHOUSE_USER" \
+                --password "$CLICKHOUSE_PASSWORD" \
+                -q "SHOW TABLES FROM {{ .Values.clickstack.database | default "otel" }}")
+
+              for table in otel_logs otel_traces otel_metrics; do
+                if echo "$TABLES" | grep -q "$table"; then
+                  echo "✓ Table $table exists"
+                else
+                  echo "✗ Table $table missing! Aborting."
+                  exit 1
+                fi
+              done
+
+              # Update OTLP Collector ConfigMap to enable dual-write
+              echo "Enabling shadow write in OTLP Collector..."
+              kubectl patch configmap {{ include "openchoreo-observability-plane.fullname" . }}-otel-collector-config \
+                -n {{ .Release.Namespace }} \
+                --type merge \
+                -p '{"data":{"shadow-write-enabled":"true"}}'
+
+              # Restart collector to pick up new config
+              echo "Restarting OTLP Collector to apply shadow write..."
+              kubectl rollout restart deployment/{{ include "openchoreo-observability-plane.fullname" . }}-gateway \
+                -n {{ .Release.Namespace }}
+
+              kubectl rollout status deployment/{{ include "openchoreo-observability-plane.fullname" . }}-gateway \
+                -n {{ .Release.Namespace }} \
+                --timeout=5m
+
+              echo "✓ Shadow write enabled successfully"
+              echo "Dual-write active: OpenSearch + ClickStack"
+
+          env:
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: username
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+{{- end }}

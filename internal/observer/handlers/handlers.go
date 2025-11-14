@@ -4,13 +4,16 @@
 package handlers
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/openchoreo/openchoreo/internal/observer/httputil"
 	"github.com/openchoreo/openchoreo/internal/observer/opensearch"
 	"github.com/openchoreo/openchoreo/internal/observer/service"
+	"github.com/openchoreo/openchoreo/pkg/telemetry/query"
 )
 
 const (
@@ -114,6 +117,12 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// HyperDXLinkRequest represents the request body for signed HyperDX URLs
+type HyperDXLinkRequest struct {
+	Path   string            `json:"path"`
+	Params map[string]string `json:"params"`
 }
 
 // GetComponentLogs handles POST /api/logs/component/{componentId}
@@ -316,8 +325,55 @@ func (h *Handler) GetOrganizationLogs(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) GetComponentTraces(w http.ResponseWriter, r *http.Request) {
-	// Bind JSON request body
+// ExportLogsCSV handles GET /api/logs/export/csv
+func (h *Handler) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract query parameters
+	queryParams := r.URL.Query()
+	startTime := queryParams.Get("startTime")
+	endTime := queryParams.Get("endTime")
+	projectID := queryParams.Get("projectId")
+	organizationID := queryParams.Get("organizationId")
+	componentIDs := queryParams["componentIds"]
+	podLabels := make(map[string]string)
+	for key, values := range queryParams {
+		if strings.HasPrefix(key, "podLabels.") && len(values) > 0 {
+			podLabels[strings.TrimPrefix(key, "podLabels.")] = values[0]
+		}
+	}
+
+	// Basic validation for required parameters
+	if startTime == "" || endTime == "" {
+		h.writeErrorResponse(w, http.StatusBadRequest, ErrorTypeMissingParameter, ErrorCodeMissingParameter, "startTime and endTime are required")
+		return
+	}
+
+	// Construct opensearch.QueryParams
+	params := opensearch.QueryParams{
+		StartTime:      startTime,
+		EndTime:        endTime,
+		ProjectID:      projectID,
+		OrganizationID: organizationID,
+	}
+
+	csvData, err := h.service.ExportLogsToCSV(ctx, params, componentIDs, podLabels)
+	if err != nil {
+		h.logger.Error("Failed to export logs to CSV", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, ErrorTypeInternalError, ErrorCodeInternalError, "Failed to export logs to CSV")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"logs.csv\"")
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(csvData)
+	if err != nil {
+		h.logger.Error("Failed to write CSV response", "error", err)
+	}
+}
+
+func (h *Handler) GetComponentTraces(w http.ResponseWriter, r *http.Request) { // Bind JSON request body
 	var req opensearch.ComponentTracesRequestParams
 	if err := httputil.BindJSON(r, &req); err != nil {
 		h.logger.Error("Failed to bind request", "error", err)
@@ -373,6 +429,58 @@ func (h *Handler) GetComponentTraces(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, result)
 }
 
+// GenerateHyperDXLink handles POST /api/hyperdx/link
+func (h *Handler) GenerateHyperDXLink(w http.ResponseWriter, r *http.Request) {
+	var req HyperDXLinkRequest
+	if err := httputil.BindJSON(r, &req); err != nil {
+		h.logger.Error("Failed to bind HyperDX link request", "error", err)
+		h.writeErrorResponse(w, http.StatusBadRequest, ErrorTypeInvalidRequest, ErrorCodeInvalidRequest, ErrorMsgInvalidRequestFormat)
+		return
+	}
+
+	if strings.TrimSpace(req.Path) == "" {
+		h.writeErrorResponse(w, http.StatusBadRequest, ErrorTypeMissingParameter, ErrorCodeMissingParameter, "Path is required")
+		return
+	}
+
+	url, err := h.service.GenerateHyperDXLink(req.Path, req.Params)
+	if err != nil {
+		h.logger.Error("Failed to generate HyperDX link", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, ErrorTypeInternalError, ErrorCodeInternalError, "Failed to generate HyperDX link")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
+// ExportCostReport handles GET /api/costs/export?month=YYYY-MM
+func (h *Handler) ExportCostReport(w http.ResponseWriter, r *http.Request) {
+	start, end, err := parseMonthRange(r.URL.Query().Get("month"))
+	if err != nil {
+		h.writeErrorResponse(w, http.StatusBadRequest, ErrorTypeInvalidRequest, ErrorCodeInvalidRequest, err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	csvPayload, err := h.service.GenerateCostReportCSV(ctx, query.CostReportQuery{
+		Start: start,
+		End:   end,
+	})
+	if err != nil {
+		h.logger.Error("Failed to generate cost report", "error", err)
+		h.writeErrorResponse(w, http.StatusInternalServerError, ErrorTypeInternalError, ErrorCodeInternalError, "Failed to generate cost report")
+		return
+	}
+
+	filename := fmt.Sprintf("clickstack-cost-%s.csv", start.Format("2006-01"))
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write([]byte(csvPayload)); err != nil {
+		h.logger.Error("Failed to write cost CSV response", "error", err)
+	}
+}
+
 // Health handles GET /health
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -388,4 +496,20 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		"status":    "healthy",
 		"timestamp": time.Now().Format(time.RFC3339),
 	})
+}
+
+func parseMonthRange(value string) (time.Time, time.Time, error) {
+	var start time.Time
+	if strings.TrimSpace(value) == "" {
+		now := time.Now().UTC()
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	} else {
+		parsed, err := time.Parse("2006-01", value)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid month format, expected YYYY-MM")
+		}
+		start = parsed
+	}
+	end := start.AddDate(0, 1, 0)
+	return start, end, nil
 }

@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/steering/product.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-13T15:11:54.690Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763046714678_iydrsio1z",
+      "approvalTitle": "ClickStack product overview"
+    }
+  ]
+}

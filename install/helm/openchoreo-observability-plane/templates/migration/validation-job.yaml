@@ -1,0 +1,142 @@
+{{- if .Values.migration.validation.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "openchoreo-observability-plane.fullname" . }}-validation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "migration") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.validation.backoffLimit | default 5 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "validation") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "openchoreo-observability-plane.serviceAccountName" . }}
+      containers:
+        - name: migration-validator
+          image: "{{ .Values.migration.image.repository }}:{{ .Values.migration.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              #!/bin/sh
+              set -e
+
+              echo "=== ClickStack Migration Validation ==="
+              echo "Timestamp: $(date -Iseconds)"
+              echo "Validation duration: {{ .Values.migration.validation.durationSeconds | default 3600 }}s"
+
+              VALIDATION_DURATION={{ .Values.migration.validation.durationSeconds | default 3600 }}
+              SAMPLE_INTERVAL={{ .Values.migration.validation.sampleIntervalSeconds | default 60 }}
+              DRIFT_THRESHOLD={{ .Values.migration.validation.maxDriftPercent | default 1.0 }}
+
+              START_TIME=$(date +%s)
+              END_TIME=$((START_TIME + VALIDATION_DURATION))
+
+              TOTAL_SAMPLES=0
+              DRIFT_SAMPLES=0
+
+              echo "Starting validation loop..."
+
+              while [ $(date +%s) -lt $END_TIME ]; do
+                CURRENT_TIME=$(date -Iseconds)
+                echo "[$CURRENT_TIME] Sampling data..."
+
+                # Query OpenSearch count (last 5 minutes)
+                OS_COUNT=$(curl -s -X POST "http://opensearch.{{ .Release.Namespace }}.svc.cluster.local:9200/kubernetes-*/_count" \
+                  -H 'Content-Type: application/json' \
+                  -d '{
+                    "query": {
+                      "range": {
+                        "@timestamp": {
+                          "gte": "now-5m",
+                          "lte": "now"
+                        }
+                      }
+                    }
+                  }' | jq -r '.count // 0')
+
+                # Query ClickStack count (last 5 minutes)
+                CH_COUNT=$(clickhouse-client \
+                  --host {{ .Values.clickstack.service.name | default "clickstack" }} \
+                  --port {{ .Values.clickstack.service.port | default 9000 }} \
+                  --user "$CLICKHOUSE_USER" \
+                  --password "$CLICKHOUSE_PASSWORD" \
+                  -q "SELECT count() FROM {{ .Values.clickstack.database | default "otel" }}.otel_logs WHERE Timestamp >= now() - INTERVAL 5 MINUTE")
+
+                TOTAL_SAMPLES=$((TOTAL_SAMPLES + 1))
+
+                if [ "$OS_COUNT" -eq 0 ] && [ "$CH_COUNT" -eq 0 ]; then
+                  echo "  Both systems: 0 logs (no traffic)"
+                  DRIFT_PCT=0
+                elif [ "$OS_COUNT" -eq 0 ]; then
+                  echo "  ⚠️  OpenSearch: 0, ClickStack: $CH_COUNT"
+                  DRIFT_PCT=100
+                else
+                  DIFF=$((CH_COUNT > OS_COUNT ? CH_COUNT - OS_COUNT : OS_COUNT - CH_COUNT))
+                  DRIFT_PCT=$(awk "BEGIN {printf \"%.2f\", ($DIFF / $OS_COUNT) * 100}")
+
+                  echo "  OpenSearch: $OS_COUNT logs"
+                  echo "  ClickStack: $CH_COUNT logs"
+                  echo "  Drift: ${DRIFT_PCT}%"
+
+                  if [ "$(echo "$DRIFT_PCT > $DRIFT_THRESHOLD" | bc)" -eq 1 ]; then
+                    DRIFT_SAMPLES=$((DRIFT_SAMPLES + 1))
+                    echo "  ⚠️  Drift exceeds threshold!"
+                  else
+                    echo "  ✓ Within tolerance"
+                  fi
+                fi
+
+                sleep $SAMPLE_INTERVAL
+              done
+
+              # Final report
+              echo ""
+              echo "=== Validation Report ==="
+              echo "Total samples: $TOTAL_SAMPLES"
+              echo "Samples with drift > ${DRIFT_THRESHOLD}%: $DRIFT_SAMPLES"
+
+              if [ "$TOTAL_SAMPLES" -gt 0 ]; then
+                DRIFT_RATE=$(awk "BEGIN {printf \"%.2f\", ($DRIFT_SAMPLES / $TOTAL_SAMPLES) * 100}")
+                echo "Drift rate: ${DRIFT_RATE}%"
+
+                if [ "$(echo "$DRIFT_RATE > {{ .Values.migration.validation.maxOverallDriftPercent | default 5.0 }}" | bc)" -eq 1 ]; then
+                  echo "✗ VALIDATION FAILED: Drift rate too high"
+                  echo "Consider investigating dual-write configuration"
+                  exit 1
+                else
+                  echo "✓ VALIDATION PASSED"
+                  echo "ClickStack is receiving data within acceptable tolerance"
+                fi
+              else
+                echo "⚠️  No samples collected"
+              fi
+
+          env:
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: username
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+{{- end }}

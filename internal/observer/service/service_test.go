@@ -47,16 +47,16 @@ func newMockLoggingService() *LoggingService {
 			MaxLogLimit:     10000,
 			DefaultLogLimit: 100,
 		},
+		Telemetry: config.TelemetryConfig{
+			Backend:        "opensearch",
+			DualRead:       false,
+			DualSampleRate: 0,
+		},
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	// Create service with a mock client - we'll replace the client in tests
-	return &LoggingService{
-		queryBuilder: opensearch.NewQueryBuilder(cfg.OpenSearch.IndexPrefix),
-		config:       cfg,
-		logger:       logger,
-	}
+	return NewLoggingService(nil, nil, cfg, logger)
 }
 
 func TestLoggingService_GetComponentLogs(t *testing.T) {

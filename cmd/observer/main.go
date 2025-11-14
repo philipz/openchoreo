@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/openchoreo/openchoreo/internal/observer/middleware"
 	"github.com/openchoreo/openchoreo/internal/observer/opensearch"
 	"github.com/openchoreo/openchoreo/internal/observer/service"
+	"github.com/openchoreo/openchoreo/internal/telemetry/clickstack"
+	"github.com/openchoreo/openchoreo/pkg/telemetry/query"
 )
 
 func main() {
@@ -47,8 +50,17 @@ func main() {
 		log.Fatalf("Failed to initialize OpenSearch client: %v", err)
 	}
 
+	// Initialize ClickStack storage if required
+	var storageProvider query.StorageProvider
+	if strings.EqualFold(cfg.Telemetry.Backend, "clickstack") {
+		storageProvider, err = clickstack.NewProvider(cfg.ClickStack, logger)
+		if err != nil {
+			log.Fatalf("Failed to initialize ClickStack provider: %v", err)
+		}
+	}
+
 	// Initialize logging service
-	loggingService := service.NewLoggingService(osClient, cfg, logger)
+	loggingService := service.NewLoggingService(storageProvider, osClient, cfg, logger)
 
 	// Initialize HTTP server
 	mux := http.NewServeMux()
@@ -64,7 +76,10 @@ func main() {
 	mux.HandleFunc("POST /api/logs/project/{projectId}", handler.GetProjectLogs)
 	mux.HandleFunc("POST /api/logs/gateway", handler.GetGatewayLogs)
 	mux.HandleFunc("POST /api/logs/org/{orgId}", handler.GetOrganizationLogs)
+	mux.HandleFunc("GET /api/logs/export/csv", handler.ExportLogsCSV)
+	mux.HandleFunc("GET /api/costs/export", handler.ExportCostReport)
 	mux.HandleFunc("POST /api/traces/component", handler.GetComponentTraces)
+	mux.HandleFunc("POST /api/hyperdx/link", handler.GenerateHyperDXLink)
 
 	// Apply middleware
 	handlerWithMiddleware := middleware.Chain(

@@ -1,170 +1,123 @@
-# OpenChoreo Observability
+# ClickStack Observability Guide
 
-OpenChoreo provides observability for both developers and platform engineers. This is provided through logs as well as metrics in the openchoreo setup. 
+OpenChoreo’s observability plane now runs on **ClickStack** (ClickHouse + HyperDX + OTLP Gateway). ClickStack replaces OpenSearch and Fluent Bit while keeping the same API contracts your developers rely on. This guide covers how to deploy the new stack, validate it on a Kind cluster, and surface data in Grafana/HyperDX.
 
-## Setting up Observability Logging
+> **Key Benefits**
+> - 10‑30x faster queries and <1s p95 for 24h log windows
+> - 70‑90% lower storage cost with columnar compression
+> - Unified logs/traces/metrics via OpenTelemetry
 
- Observability logs are provided through a combination of fluentbit and open search in the data plane. The option of setting up observability is set to false by default. If you need to setup observability in your data plane, you can execute the following command based on the type of setup you have chosen.
+---
 
-1. In a single cluster setup
-```
-helm upgrade --install choreo-dataplane oci://ghcr.io/openchoreo/helm-charts/choreo-dataplane \
-   --kube-context kind-choreo \
-   --namespace "choreo-system" \
-   --create-namespace \
-   --set certmanager.enabled=false \
-   --set observability.logging.enabled=true \
-   --set observer.image.tag=latest-dev \
-   --timeout 30m
-```
+## 1. Deploy the Observability Plane
 
-2. In a multicluster setup
-
-> [!IMPORTANT]  
-> This multi-cluster setup (Control plane + Dataplane with FluentBit/OpenSearch) requires minimum 4 CPU and 8GB memory for stable cluster operation.
-```
-helm upgrade --install choreo-dataplane oci://ghcr.io/openchoreo/helm-charts/choreo-dataplane \
-   --kube-context kind-choreo-dp \
-   --namespace "choreo-system" --create-namespace \
-   --set observability.logging.enabled=true \
-   --timeout 30m
+### Helm deployment (recommended)
+```bash
+helm upgrade --install openchoreo-observability-plane \
+  ./install/helm/openchoreo-observability-plane \
+  --namespace openchoreo-observability-plane \
+  --create-namespace \
+  --set clickstack.credentials.password="<strong-password>" \
+  --set hyperdx.signing.key="<32-byte-secret>"
 ```
 
-## Configuring Observability Logging feature 
-By default all logs in the following namespaces are collected and routed to the dashboard.
+Important values:
 
-- choreo-system - this will capture all operational components of the choreo dataplane
+| Value | Purpose |
+| --- | --- |
+| `clickstack.*` | ClickHouse StatefulSet sizing, TLS, credentials |
+| `gateway.*` | OTLP gateway (OpenTelemetry Collector) ingress |
+| `hyperdx.*` | HyperDX UI configuration + signing secret |
+| `collectors.*` | Node-level OTLP collectors (enabled by default) |
+| `monitoring.*` | Prometheus alerts and Grafana dashboards for ClickStack metrics/cost |
 
-- dp* - this will capture all application logs of components deployed in choreo
-
-The configurations for this is in the template files under 
-
- - `<your_local_openchoreo_repo>/install/helm/choreo-dataplane/templates`,
-  
-and the values for these templates can be found at 
- - `<your_local_openchoreo_repo>/install/helm/choreo-dataplane/values.yaml`
-
-### Some configurations that could be fine tuned are;
-
-  - Specifying what to include and exclude when collecting logs
-
-    By default all logs in namespaces "choreo-system" and "dp-*". Opensearch and Fluent-bit logs are excluded.
-
-    >     input:
-    >     ...
-    >     path: "/var/log/containers/*_choreo-system_*.log,/var/log/containers/*_dp-*_*.log"
-    >     excludePath: "/var/log/containers/*opensearch-0*_choreo-system_*.log,/var/log/containers/*opensearch-dashboard*_choreo-system_*.log,/var/log/containers/*fluent-bit*_choreo-system_*.log"
-    >     ...
- - Specifying where to forward the collected logs to
- 
-    In the default setup all logs are forwarded to the opensearch node
-
-    >     output:
-    >     name: opensearch
-    >     match: "kube.*"
-    >     host: opensearch
-    >     port: 9200
-    >     ...
-
- - Add additional filters for Fluent-bit under the fluent-bit section as a filter in the values file.
-
-
- ## Verification of Observability Logging setup
-Once the dataplane helm chart has been installed, you can verify whether the necessary componenets are up and running with the following command. 
-
+### Local testing helper
+For quick validation against a Kind cluster with `kubectl` access:
+```bash
+make deploy-observability
 ```
-kubectl get pods -n choreo-system
+This command applies the reusable OTLP collector kustomization located at `config/observability/collectors/otel/base`.
+
+---
+
+## 2. Verify the Installation
+
+```bash
+kubectl get pods -n openchoreo-observability-plane
+kubectl get daemonset otel-collector -n openchoreo-observability-plane
+kubectl get configmap -n openchoreo-observability-plane -l grafana_dashboard=1
 ```
 
-You should see pods with names as follows:
+You should see:
+- `clickstack-0..N` StatefulSet pods
+- `otlp-gateway` deployment
+- `hyperdx` deployment
+- `otel-collector` DaemonSet with READY count equal to desired node count
+- Grafana dashboard ConfigMaps labeled `grafana_dashboard=1`
+
+Prometheus rules and alerts are installed automatically when `prometheus.enabled=true`. Review them with:
+```bash
+kubectl get prometheusrule -n openchoreo-observability-plane
 ```
-choreo-system choreo-dataplane-fluent-bit-xxxx    
-choreo-system choreo-dataplane-opensearch-0
-choreo-system choreo-dataplane-opensearch-dashboard-xxxxx-xxxxx
-```  
 
-## Viewing logs on the Opensearch Dashboard
- 1. Get the pod name for opensearch dashboard. You can execute the following  and get it. 
+---
 
-    ```
-    kubectl get pods -n choreo-system
-    ```
+## 3. Viewing Dashboards & Alerts
 
- 2. Do a port forward for the dashboard as follows
- 
-    ```
-    kubectl port-forward pod/<dashboard-pod-name> 5601:5601 -n choreo-system
-    ```
- 
- 3. Copy the following on your browser as the url
+### Grafana
+1. Expose Grafana (from your existing monitoring stack) or import the dashboard JSON files in `config/observability/grafana/dashboards/`.
+2. Key panels:
+   - **ClickStack Overview**: ingestion throughput, query p95, compression ratio, storage cost
+   - **ClickStack Cost & Health**: cost per project, ingestion lag, query spend
 
-    `http://localhost:5601`
+### HyperDX
+```bash
+kubectl port-forward deploy/hyperdx 3000:3000 -n openchoreo-observability-plane
+open http://localhost:3000
+```
+Use the `/api/hyperdx/link` endpoint to generate signed embeds for Backstage widgets.
 
- 4. Once opensearch loads, on the home page click on "Discover" under the Opensearch Dashboards menu section. You will see a button indicating "Create Index Patterns" - click this.
+### Prometheus Alerts
+Alerts fire for:
+- Ingestion lag > 3s (`ClickStackIngestionLagHigh`)
+- Query p95 > 1s (`ClickStackQueryLatencyHigh`)
+- Compression ratio < 10 (`ClickStackCompressionLow`)
 
- 5. On the "Create Index Pattern" page, create an indexing pattern as `kubernetes*` and click on "Next Step" button. Select `@timestamp` from the drop down and click on the "Create Index Pattern" button below.
+Adjust thresholds in `values.yaml -> monitoring.alerts`.
 
- 6. You will be taken back to the home page - Click on "Discover" again. This will load all the logs onto the dashboard. 
+---
 
- 7. Alternatively, to create the index pattern programatically you can run the following curl command after the port forward
- ```
- curl -X POST "http://localhost:5601/api/saved_objects/index-pattern" \
-  -H "Content-Type: application/json" \
-  -H "osd-xsrf: true" \
-  -u "admin:admin" \
-  -d '{
-    "attributes": {
-      "title": "kubernetes*",
-      "timeFieldName": "@timestamp"
-    }
-  }'
- ```
-8. To view application logs, you can use the filter and search capabilities on the "Discover" view 
+## 4. E2E / CI Validation
 
-   For example, after deploying the [Time logger task](./../samples/deploying-applications/build-from-source/time-logger-task/) which logs the current time periodically, you can view the logs as follows:
+Set `E2E_CLICKSTACK=true` before running `go test ./test/e2e -run ClickStack` to execute the ClickStack integration suite. The suite now:
+- Installs the `openchoreo-observability-plane` Helm chart in minimal mode and waits for ClickStack, OTLP gateway, Observer, HyperDX, and collector DaemonSets to become ready.
+- Verifies Grafana dashboards ConfigMaps are published.
+- Sends a synthetic OTLP/HTTP log through the gateway, then queries ClickStack to confirm the record is indexed.
+- Deletes the `clickstack-0` pod and ensures the StatefulSet recreates it without losing the ingested record.
 
-   1. Get the namespace of your deployed application:
+Without the env var the test automatically skips.
 
-      ```
-      kubectl get namespaces
-      ```
+---
 
-      Look for a namespace similar to:
+## 5. Cost Export API
 
-      ```
-      dp-default-org-default-proje-development-39faf2d8
-      ```
+FinOps teams can pull monthly CSV reports:
+```bash
+kubectl port-forward svc/observer 8080 -n openchoreo-observability-plane
+curl "http://127.0.0.1:8080/api/costs/export?month=2025-11" \
+  -H "Authorization: Bearer <token>" \
+  -o clickstack-cost-2025-11.csv
+```
+Behind the scenes the observer service aggregates telemetry using ClickStack SQL and applies the cost coefficients defined in `monitoring.cost`.
 
-   2. In the Opensearch Dashboard "Discover" view, create a filter for this namespace using:
+---
 
-      ```
-      kubernetes.namespace_name:dp-default-org-default-proje-development-39faf2d8
-      ```
+## 6. Migration Checklist (OpenSearch → ClickStack)
 
-   3. In the search bar, enter `Current time` to filter logs generated by the application.
+1. Deploy ClickStack plane (Section 1).
+2. Enable dual-write in observer via `observer.telemetry.dualRead=true` until parity confirmed.
+3. Run `make deploy-observability` to confirm collectors run on each node.
+4. Verify Grafana dashboards and Prometheus alerts.
+5. Use `/api/costs/export` to validate billing data before disabling OpenSearch.
 
-   4. Refresh or adjust the time range selector in the dashboard to view the latest logs.
-
-9. Use the choreo-observer api to access the logs of a particular component
-   
-   1. Deploy the [Go greeting serice](../samples/deploying-applications/languages/go/)
-   
-   2. Do a port forward to the choreo-observer api as below
-
-   ```
-   kubectl port-forward svc/choreo-observer 8080:8080 -n choreo-system
-   ```
-
-   3. Use CURL to query the service. The example below is to get "ERROR" logs of component "greeting-service-go" in environment "development" for a specific time window 
-
-   ```
-   curl -X POST http://localhost:8080/api/logs/component/greeting-service-go \
-        -H "Content-Type: application/json" \
-        -d '{
-          "startTime": "2025-07-02T18:40:00Z",
-          "endTime": "2025-07-02T18:50:00Z",
-          "environmentId": "development",
-          "logLevels": ["ERROR"],
-          "limit": 10
-        }'
-   ```
+Runbook details live in `docs/runbooks/clickstack-migration.md`.

@@ -1,0 +1,43 @@
+{{- if and .Values.clickstack.enabled .Values.clickstack.initSQL.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clickstack-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "clickstack") | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "clickstack-init") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: schema-init
+          image: "{{ .Values.clickstack.image.repository }}:{{ .Values.clickstack.image.tag }}"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for ClickStack..."
+              until clickhouse-client --host clickstack --port {{ .Values.clickstack.service.port | default 9000 }} --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" -q "SELECT 1"; do
+                echo "ClickStack not ready, sleeping 5s"
+                sleep 5
+              done
+              echo "Applying schema"
+              cat <<'SQL' | clickhouse-client --host clickstack --port {{ .Values.clickstack.service.port | default 9000 }} --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"
+              {{- .Values.clickstack.initSQL.schema | nindent 14 }}
+SQL
+          env:
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: username
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: password
+{{- end }}

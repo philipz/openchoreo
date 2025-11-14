@@ -121,3 +121,39 @@ Parameters:
 {{ include "openchoreo-observability-plane.selectorLabels" .context }}
 app.kubernetes.io/component: {{ .component }}
 {{- end }}
+
+{{/*
+Returns installation mode (standard|minimal)
+*/}}
+{{- define "openchoreo-observability-plane.installationMode" -}}
+{{- $mode := default "standard" .Values.global.installationMode -}}
+{{- if eq (lower $mode) "minimal" -}}
+minimal
+{{- else -}}
+standard
+{{- end -}}
+{{- end }}
+
+{{/*
+Evaluate replicas based on installation mode
+*/}}
+{{- define "openchoreo-observability-plane.clickstackReplicas" -}}
+{{- $mode := include "openchoreo-observability-plane.installationMode" . -}}
+{{- if eq $mode "minimal" -}}
+{{- default 1 .Values.clickstack.replicas.minimal -}}
+{{- else -}}
+{{- default 3 .Values.clickstack.replicas.standard -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Evaluate ClickStack PVC size
+*/}}
+{{- define "openchoreo-observability-plane.clickstackStorageSize" -}}
+{{- $mode := include "openchoreo-observability-plane.installationMode" . -}}
+{{- if eq $mode "minimal" -}}
+{{- default "50Gi" .Values.clickstack.storage.minimalSize -}}
+{{- else -}}
+{{- default "200Gi" .Values.clickstack.storage.size -}}
+{{- end -}}
+{{- end }}

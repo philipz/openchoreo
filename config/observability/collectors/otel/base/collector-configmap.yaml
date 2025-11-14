@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+data:
+  collector.yaml: |
+    receivers:
+      filelog/containers:
+        include:
+          - /var/log/containers/*.log
+        exclude:
+          - /var/log/containers/*fluent-bit*.log
+        start_at: end
+        include_file_name: false
+        include_file_path: true
+        operators:
+          - type: move
+            from: body
+            to: attributes.message
+          - type: parse_json
+            parse_from: attributes.message
+            if: 'body["log"] =~ ""'
+          - type: remove
+            field: attributes.message
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 400
+        spike_limit_mib: 100
+      batch:
+        send_batch_size: 512
+        timeout: 5s
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.namespace.name
+            - k8s.pod.uid
+            - k8s.node.name
+          labels:
+            - key: component-name
+            - key: environment-name
+            - key: project-name
+            - key: organization-name
+            - key: version
+            - key: version_id
+            - key: pipeline-id
+            - key: workflow_name
+            - key: build-name
+            - key: uuid
+            - key: target
+      attributes/promote:
+        actions:
+          - action: upsert
+            key: component.id
+            from_attribute: component-name
+          - action: upsert
+            key: environment.id
+            from_attribute: environment-name
+          - action: upsert
+            key: project.id
+            from_attribute: project-name
+          - action: upsert
+            key: organization.id
+            from_attribute: organization-name
+    exporters:
+      otlphttp/clickstack:
+        endpoint: http://otlp-gateway.openchoreo-observability-plane.svc.cluster.local:4318
+        compression: gzip
+    service:
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        logs:
+          receivers: [filelog/containers]
+          processors: [memory_limiter, k8sattributes, attributes/promote, batch]
+          exporters: [otlphttp/clickstack]

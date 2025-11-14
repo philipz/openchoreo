@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+var testClickStackConfig = ClickStackConfig{
+	Hosts:       []string{"localhost:9000"},
+	Database:    "telemetry",
+	Username:    "default",
+	Password:    "",
+	Secure:      false,
+	Timeout:     10 * time.Second,
+	QueryTimeout: 5 * time.Second,
+	LogsTable:   "telemetry.logs",
+	TracesTable: "telemetry.traces",
+}
+
 func TestLoad_WithDefaults(t *testing.T) {
 	// Clear any existing environment variables
 	envVars := []string{
@@ -130,6 +142,7 @@ func TestValidate(t *testing.T) {
 				Logging: LoggingConfig{
 					MaxLogLimit: 1000,
 				},
+				ClickStack: testClickStackConfig,
 			},
 			expectErr: false,
 		},
@@ -146,6 +159,7 @@ func TestValidate(t *testing.T) {
 				Logging: LoggingConfig{
 					MaxLogLimit: 1000,
 				},
+				ClickStack: testClickStackConfig,
 			},
 			expectErr: true,
 		},
@@ -162,6 +176,7 @@ func TestValidate(t *testing.T) {
 				Logging: LoggingConfig{
 					MaxLogLimit: 1000,
 				},
+				ClickStack: testClickStackConfig,
 			},
 			expectErr: true,
 		},
@@ -178,6 +193,7 @@ func TestValidate(t *testing.T) {
 				Logging: LoggingConfig{
 					MaxLogLimit: 1000,
 				},
+				ClickStack: testClickStackConfig,
 			},
 			expectErr: true,
 		},
@@ -194,6 +210,7 @@ func TestValidate(t *testing.T) {
 				Logging: LoggingConfig{
 					MaxLogLimit: 1000,
 				},
+				ClickStack: testClickStackConfig,
 			},
 			expectErr: true,
 		},
@@ -210,6 +227,7 @@ func TestValidate(t *testing.T) {
 				Logging: LoggingConfig{
 					MaxLogLimit: 0,
 				},
+				ClickStack: testClickStackConfig,
 			},
 			expectErr: true,
 		},

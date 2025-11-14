@@ -1,0 +1,86 @@
+{{- if .Values.clickstack.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickstack
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "clickstack") | nindent 4 }}
+  {{- with .Values.clickstack.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "clickstack") | nindent 4 }}
+  ports:
+    - name: tcp-native
+      port: {{ .Values.clickstack.service.port | default 9000 }}
+      targetPort: {{ .Values.clickstack.service.port | default 9000 }}
+      protocol: TCP
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickstack
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "clickstack") | nindent 4 }}
+spec:
+  serviceName: clickstack
+  replicas: {{ include "openchoreo-observability-plane.clickstackReplicas" . }}
+  selector:
+    matchLabels:
+      {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "clickstack") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "clickstack") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+      containers:
+        - name: clickhouse
+          image: "{{ .Values.clickstack.image.repository }}:{{ .Values.clickstack.image.tag }}"
+          imagePullPolicy: {{ .Values.clickstack.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: CLICKHOUSE_DB
+              value: telemetry
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: username
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-credentials
+                  key: password
+          ports:
+            - name: native
+              containerPort: {{ .Values.clickstack.service.port | default 9000 }}
+              protocol: TCP
+          volumeMounts:
+            - name: clickstack-data
+              mountPath: /var/lib/clickhouse
+          resources:
+            {{- if .Values.clickstack.resources }}
+            {{- toYaml .Values.clickstack.resources | nindent 12 }}
+            {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: clickstack-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.clickstack.storage.storageClass }}
+        storageClassName: {{ .Values.clickstack.storage.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ include "openchoreo-observability-plane.clickstackStorageSize" . }}
+{{- end }}

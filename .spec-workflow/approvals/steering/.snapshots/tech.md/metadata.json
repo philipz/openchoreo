@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/steering/tech.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-13T15:17:33.555Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763047053551_psdryofs2",
+      "approvalTitle": "ClickStack tech stack"
+    }
+  ]
+}

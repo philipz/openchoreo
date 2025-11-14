@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/steering/structure.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-13T15:26:24.661Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763047584656_uv3ya4rcm",
+      "approvalTitle": "ClickStack structure doc"
+    }
+  ]
+}

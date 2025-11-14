@@ -1,0 +1,122 @@
+{{- if .Values.migration.cleanup.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "openchoreo-observability-plane.fullname" . }}-cleanup-opensearch
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "migration") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.cleanup.backoffLimit | default 2 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "cleanup") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "openchoreo-observability-plane.serviceAccountName" . }}
+      containers:
+        - name: opensearch-cleanup
+          image: "{{ .Values.migration.image.repository }}:{{ .Values.migration.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              #!/bin/sh
+              set -e
+
+              echo "=== OpenSearch Cleanup Job ==="
+              echo "Timestamp: $(date -Iseconds)"
+
+              {{- if .Values.migration.cleanup.requireExplicitFlag }}
+              # Safety check: require explicit flag
+              if [ "$MIGRATION_CLEANUP_CONFIRMED" != "true" ]; then
+                echo "⚠️  Cleanup not confirmed"
+                echo "Set migration.cleanup.confirmed=true in values to proceed"
+                echo "This job will NOT delete OpenSearch resources"
+                exit 0
+              fi
+              {{- end }}
+
+              echo "Starting OpenSearch resource cleanup..."
+
+              # Stop dual-write first
+              echo "Step 1: Disabling dual-write..."
+              kubectl patch configmap {{ include "openchoreo-observability-plane.fullname" . }}-otel-collector-config \
+                -n {{ .Release.Namespace }} \
+                --type merge \
+                -p '{"data":{"shadow-write-enabled":"false"}}'
+
+              kubectl rollout restart deployment/{{ include "openchoreo-observability-plane.fullname" . }}-gateway \
+                -n {{ .Release.Namespace }}
+
+              echo "✓ Dual-write disabled"
+
+              {{- if .Values.migration.cleanup.archiveIndices }}
+              # Archive indices to backup location
+              echo "Step 2: Archiving OpenSearch indices..."
+
+              BACKUP_LOCATION="{{ .Values.migration.cleanup.backupLocation | default "/backup/opensearch" }}"
+              mkdir -p "$BACKUP_LOCATION"
+
+              curl -X POST "http://opensearch.{{ .Release.Namespace }}.svc.cluster.local:9200/_snapshot/migration_backup/_all" \
+                -H 'Content-Type: application/json' \
+                -d '{
+                  "indices": "kubernetes-*",
+                  "ignore_unavailable": true,
+                  "include_global_state": false
+                }'
+
+              echo "✓ Indices archived to $BACKUP_LOCATION"
+              {{- end }}
+
+              # Delete OpenSearch resources
+              echo "Step 3: Deleting OpenSearch resources..."
+
+              {{- if .Values.migration.cleanup.deleteStatefulSet }}
+              kubectl delete statefulset opensearch -n {{ .Release.Namespace }} --ignore-not-found=true
+              echo "✓ OpenSearch StatefulSet deleted"
+              {{- end }}
+
+              {{- if .Values.migration.cleanup.deletePVCs }}
+              kubectl delete pvc -l app=opensearch -n {{ .Release.Namespace }} --ignore-not-found=true
+              echo "✓ OpenSearch PVCs deleted"
+              {{- end }}
+
+              {{- if .Values.migration.cleanup.deleteServices }}
+              kubectl delete service opensearch -n {{ .Release.Namespace }} --ignore-not-found=true
+              kubectl delete service opensearch-dashboards -n {{ .Release.Namespace }} --ignore-not-found=true
+              echo "✓ OpenSearch Services deleted"
+              {{- end }}
+
+              {{- if .Values.migration.cleanup.deleteConfigMaps }}
+              kubectl delete configmap opensearch-config -n {{ .Release.Namespace }} --ignore-not-found=true
+              echo "✓ OpenSearch ConfigMaps deleted"
+              {{- end }}
+
+              {{- if .Values.migration.cleanup.deleteSecrets }}
+              kubectl delete secret opensearch-credentials -n {{ .Release.Namespace }} --ignore-not-found=true
+              echo "✓ OpenSearch Secrets deleted"
+              {{- end }}
+
+              echo ""
+              echo "=== Cleanup Complete ==="
+              echo "OpenSearch resources removed from namespace {{ .Release.Namespace }}"
+              echo "ClickStack is now the sole observability backend"
+
+          env:
+            - name: MIGRATION_CLEANUP_CONFIRMED
+              value: "{{ .Values.migration.cleanup.confirmed | default false }}"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+{{- end }}

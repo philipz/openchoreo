@@ -17,6 +17,8 @@ import (
 type Config struct {
 	Server     ServerConfig     `koanf:"server"`
 	OpenSearch OpenSearchConfig `koanf:"opensearch"`
+	ClickStack ClickStackConfig `koanf:"clickstack"`
+	Telemetry  TelemetryConfig  `koanf:"telemetry"`
 	Auth       AuthConfig       `koanf:"auth"`
 	Logging    LoggingConfig    `koanf:"logging"`
 	LogLevel   string           `koanf:"loglevel"`
@@ -57,6 +59,44 @@ type LoggingConfig struct {
 	MaxLogLinesPerFile   int `koanf:"max.log.lines.per.file"`
 }
 
+// TelemetryConfig controls backend selection and integrations
+type TelemetryConfig struct {
+	Backend        string        `koanf:"backend"`
+	DualRead       bool          `koanf:"dual.read"`
+	DualSampleRate float64       `koanf:"dual.sample.rate"`
+	HyperDX        HyperDXConfig `koanf:"hyperdx"`
+}
+
+// HyperDXConfig stores URL signing settings
+type HyperDXConfig struct {
+	BaseURL    string        `koanf:"base.url"`
+	SigningKey string        `koanf:"signing.key"`
+	TTL        time.Duration `koanf:"ttl"`
+}
+
+// ClickStackConfig holds ClickHouse/HyperDX connection configuration
+type ClickStackConfig struct {
+	Hosts             []string      `koanf:"hosts"`
+	Database          string        `koanf:"database"`
+	Username          string        `koanf:"username"`
+	Password          string        `koanf:"password"`
+	Secure            bool          `koanf:"secure"`
+	CACertPath        string        `koanf:"ca.cert"`
+	ClientCertPath    string        `koanf:"client.cert"`
+	ClientKeyPath     string        `koanf:"client.key"`
+	Timeout           time.Duration `koanf:"timeout"`
+	QueryTimeout      time.Duration `koanf:"query.timeout"`
+	ReadTimeout       time.Duration `koanf:"read.timeout"`
+	WriteTimeout      time.Duration `koanf:"write.timeout"`
+	RetryAttempts     int           `koanf:"retry.attempts"`
+	LogsTable         string        `koanf:"logs.table"`
+	TracesTable       string        `koanf:"traces.table"`
+	MaxOpenConns      int           `koanf:"max.open.conns"`
+	MaxIdleConns      int           `koanf:"max.idle.conns"`
+	ConnMaxLifetime   time.Duration `koanf:"conn.max.lifetime"`
+	CompressionMethod string        `koanf:"compression.method"`
+}
+
 // Load loads configuration from environment variables and defaults
 func Load() (*Config, error) {
 	k := koanf.New(".")
@@ -95,16 +135,45 @@ func Load() (*Config, error) {
 		"JWT_SECRET":                      "auth.jwt.secret",       // Common alias
 		"ENABLE_AUTH":                     "auth.enable.auth",      // Common alias
 		"MAX_LOG_LIMIT":                   "logging.max.log.limit", // Common alias
+		"CLICKSTACK_HOSTS":                "clickstack.hosts",
+		"CLICKSTACK_DATABASE":             "clickstack.database",
+		"CLICKSTACK_USERNAME":             "clickstack.username",
+		"CLICKSTACK_PASSWORD":             "clickstack.password",
+		"CLICKSTACK_SECURE":               "clickstack.secure",
+		"CLICKSTACK_CA_CERT":              "clickstack.ca.cert",
+		"CLICKSTACK_CLIENT_CERT":          "clickstack.client.cert",
+		"CLICKSTACK_CLIENT_KEY":           "clickstack.client.key",
+		"CLICKSTACK_TIMEOUT":              "clickstack.timeout",
+		"CLICKSTACK_QUERY_TIMEOUT":        "clickstack.query.timeout",
+		"CLICKSTACK_READ_TIMEOUT":         "clickstack.read.timeout",
+		"CLICKSTACK_WRITE_TIMEOUT":        "clickstack.write.timeout",
+		"CLICKSTACK_RETRY_ATTEMPTS":       "clickstack.retry.attempts",
+		"CLICKSTACK_LOGS_TABLE":           "clickstack.logs.table",
+		"CLICKSTACK_TRACES_TABLE":         "clickstack.traces.table",
+		"CLICKSTACK_MAX_OPEN_CONNS":       "clickstack.max.open.conns",
+		"CLICKSTACK_MAX_IDLE_CONNS":       "clickstack.max.idle.conns",
+		"CLICKSTACK_CONN_MAX_LIFETIME":    "clickstack.conn.max.lifetime",
+		"CLICKSTACK_COMPRESSION_METHOD":   "clickstack.compression.method",
+		"TELEMETRY_BACKEND":               "telemetry.backend",
+		"TELEMETRY_DUAL_READ":             "telemetry.dual.read",
+		"TELEMETRY_DUAL_SAMPLE_RATE":      "telemetry.dual.sample.rate",
+		"HYPERDX_BASE_URL":                "telemetry.hyperdx.base.url",
+		"HYPERDX_SIGNING_KEY":             "telemetry.hyperdx.signing.key",
+		"HYPERDX_TTL":                     "telemetry.hyperdx.ttl",
 	}
 
 	// Check for environment variables and map them to nested structure
 	for envKey, configKey := range envMappings {
 		if value := os.Getenv(envKey); value != "" {
+			var processed interface{} = value
+			if configKey == "clickstack.hosts" {
+				processed = splitAndTrim(value)
+			}
 			// Split the config key and create nested structure
 			parts := strings.Split(configKey, ".")
 			if len(parts) == 1 {
 				// Top-level key
-				envOverrides[configKey] = value
+				envOverrides[configKey] = processed
 			} else if len(parts) == 2 {
 				// Nested key like "server.port"
 				section := parts[0]
@@ -112,7 +181,7 @@ func Load() (*Config, error) {
 				if envOverrides[section] == nil {
 					envOverrides[section] = make(map[string]interface{})
 				}
-				envOverrides[section].(map[string]interface{})[key] = value
+				envOverrides[section].(map[string]interface{})[key] = processed
 			} else if len(parts) >= 3 {
 				// Handle multi-part keys like "logging.max.log.limit"
 				section := parts[0]
@@ -120,7 +189,7 @@ func Load() (*Config, error) {
 				if envOverrides[section] == nil {
 					envOverrides[section] = make(map[string]interface{})
 				}
-				envOverrides[section].(map[string]interface{})[key] = value
+				envOverrides[section].(map[string]interface{})[key] = processed
 			}
 		}
 	}
@@ -175,6 +244,34 @@ func getDefaults() map[string]interface{} {
 			"default.build.log.limit": 3000,
 			"max.log.lines.per.file":  600000,
 		},
+		"clickstack": map[string]interface{}{
+			"hosts":              []string{"localhost:9000"},
+			"database":           "telemetry",
+			"username":           "default",
+			"password":           "",
+			"secure":             false,
+			"timeout":            "30s",
+			"query.timeout":      "10s",
+			"read.timeout":       "30s",
+			"write.timeout":      "30s",
+			"retry.attempts":     3,
+			"logs.table":         "telemetry.logs_mv",
+			"traces.table":       "telemetry.traces_mv",
+			"max.open.conns":     10,
+			"max.idle.conns":     5,
+			"conn.max.lifetime":  "5m",
+			"compression.method": "lz4",
+		},
+		"telemetry": map[string]interface{}{
+			"backend":          "opensearch",
+			"dual.read":        false,
+			"dual.sample.rate": 0.05,
+			"hyperdx": map[string]interface{}{
+				"base.url":    "",
+				"signing.key": "",
+				"ttl":         "15m",
+			},
+		},
 		"loglevel": "info",
 	}
 }
@@ -196,5 +293,37 @@ func (c *Config) validate() error {
 		return fmt.Errorf("max log limit must be positive")
 	}
 
+	if len(c.ClickStack.Hosts) == 0 {
+		return fmt.Errorf("at least one clickstack host is required")
+	}
+
+	if c.ClickStack.LogsTable == "" || c.ClickStack.TracesTable == "" {
+		return fmt.Errorf("clickstack logs and traces table names are required")
+	}
+
+	if c.Telemetry.DualSampleRate < 0 || c.Telemetry.DualSampleRate > 1 {
+		return fmt.Errorf("telemetry dual sample rate must be between 0 and 1")
+	}
+
+	if c.Telemetry.HyperDX.SigningKey != "" && c.Telemetry.HyperDX.BaseURL == "" {
+		return fmt.Errorf("hyperdx base url is required when signing is enabled")
+	}
+
+	if c.Telemetry.HyperDX.SigningKey != "" && c.Telemetry.HyperDX.TTL <= 0 {
+		return fmt.Errorf("hyperdx ttl must be positive when signing is enabled")
+	}
+
 	return nil
+}
+
+func splitAndTrim(value string) []string {
+	raw := strings.Split(value, ",")
+	hosts := make([]string, 0, len(raw))
+	for _, h := range raw {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
 }

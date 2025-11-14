@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/specs/clickstack-observability-plane/design.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-13T15:41:53.910Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763048513900_7zxxz27ba",
+      "approvalTitle": "ClickStack observability design"
+    }
+  ]
+}

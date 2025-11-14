@@ -1,154 +1,167 @@
 # Global values shared across all components
 global:
-  # Common labels to add to all resources
   commonLabels: {}
+  # standard → multi-node ClickStack, minimal → single replica footprint
+  installationMode: standard
 
-  # Installation mode for the OpenChoreo Observability Plane
-  # standard: Operator managed OpenSearch cluster will be deployed
-  # minimal: Single replica OpenSearch instance will be deployed
-  installationMode: minimal
-
-data-prepper:
-  enabled: false
-  fullnameOverride: "data-prepper"
-
-  pipelineConfig:
-    enabled: true
-    config:
-      trace-pipeline:
-        delay: "100"
-        source:
-          otel_trace_source:
-            ssl: false
-        buffer:
-          bounded_blocking:
-            buffer_size: 12800
-            batch_size: 200
-        sink:
-          - opensearch:
-              hosts: ["http://opensearch:9200"]
-              insecure: true
-              index_type: trace-analytics-raw
-
+# ClickStack (ClickHouse + ingestion service)
+clickstack:
+  enabled: true
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "24.6"
+    pullPolicy: IfNotPresent
+  replicas:
+    standard: 3
+    minimal: 1
   resources:
     limits:
-      cpu: 1000m
-      memory: 500Mi
+      cpu: 2000m
+      memory: 6Gi
     requests:
-      cpu: 1000m
-      memory: 500Mi
-
-openSearch:
-  enabled: true
-
-  extraEnvs:
-    - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
-      value: ThisIsTheOpenSearchPassword1
-    - name: DISABLE_SECURITY_PLUGIN
-      value: "true"
-  nameOverride: "opensearch"
-  image:
-    tag: "3.3.0"
-  masterService: opensearch
-
-  rbac:
-    create: true
-    serviceAccountName: "opensearch"
-
-  securityConfig:
+      cpu: 500m
+      memory: 2Gi
+  storage:
+    size: 200Gi
+    minimalSize: 50Gi
+    storageClass: ""
+  service:
+    port: 9000
+    annotations: {}
+  credentials:
+    username: clickstack_admin
+    password: ThisIsTheClickStackPassword1
+  tls:
     enabled: false
-  singleNode: true
-
-# OpenSearch cluster configuration
-openSearchCluster:
-  enabled: false
-  general:
-    version: 3.3.0
-    additionalConfig:
-      pluginsSecurityDisabled: "true"
-
-  dashboard:
+    secretName: ""
+  initSQL:
     enabled: true
-    replicas: 1
-    version: 3.3.0
+    schema: |
+      CREATE DATABASE IF NOT EXISTS telemetry;
+      CREATE TABLE IF NOT EXISTS telemetry.logs_mv (
+        timestamp DateTime64(9),
+        log String,
+        log_level String,
+        component_id String,
+        environment_id String,
+        project_id String,
+        version String,
+        version_id String,
+        namespace String,
+        pod_id String,
+        container_name String,
+        labels_json JSON,
+        log_type String
+      ) ENGINE = MergeTree()
+      ORDER BY (organization_id, project_id, component_id, timestamp);
 
-  nodePools:
-    data:
-      replicas: 2
-      diskSize: 1Gi
-      resources:
-        limits:
-          cpu: 1000m
-          memory: 1Gi
-        requests:
-          cpu: 100m
-          memory: 700Mi
-    master:
-      replicas: 0
-      diskSize: 1Gi
-      resources:
-        limits:
-          cpu: 1000m
-          memory: 1Gi
-        requests:
-          cpu: 100m
-          memory: 512Mi
-
-  # Secrets
-  adminUsername: admin
-  adminUserPassword: admin
-  internalUsers: |
-    # This is the internal user database
-    # The hash value is a bcrypt hash and can be generated with plugin/tools/hash.sh
-
-    _meta:
-      type: "internalusers"
-      config_version: 2
-
-    admin:
-      hash: "%s"
-      reserved: true
-      backend_roles:
-      - "admin"
-      description: "Admin user"
-
-openSearchClusterSetup:
-  image:
-    repository: ghcr.io/openchoreo/init-observability-opensearch
-    tag: ""
-
-# Customizing OpenSearch Dashboards configurations
-openSearchDashboards:
+# OTLP gateway pushes traces/metrics/logs into ClickStack
+gateway:
   enabled: true
-
-  config:
-    disableSecurity: "true"
-
-  extraEnvs:
-  - name: DISABLE_SECURITY_DASHBOARDS_PLUGIN
-    value: "true"
-
-  fullnameOverride: "opensearch-dashboards"
   image:
-    tag: "3.3.0"
-  opensearchHosts: "http://opensearch:9200"
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.103.0"
+    pullPolicy: IfNotPresent
   replicas: 1
+  service:
+    otlpGrpcPort: 4317
+    otlpHttpPort: 4318
+  extraLabels: {}
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+  config:
+    exporters:
+      clickhouse:
+        endpoint: "clickstack:9000"
+        database: telemetry
+        username: "${env:CLICKSTACK_USERNAME}"
+        password: "${env:CLICKSTACK_PASSWORD}"
+    processors:
+      batch: {}
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 400
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+          http:
+            cors:
+              allowed_origins:
+                - "*"
+    service:
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [clickhouse]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [clickhouse]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [clickhouse]
 
-# OpenChoreo Observer Service Configuration
+# HyperDX UI deployment
+hyperdx:
+  enabled: true
+  image:
+    repository: hyperdx/hyperdx
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 3000
+  env:
+    CLICKHOUSE_HOST: clickstack
+    CLICKHOUSE_PORT: "9000"
+    CLICKHOUSE_DATABASE: telemetry
+  signing:
+    key: ""
+    ttl: 15m
+    baseUrl: http://hyperdx:3000
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+# Observer service configuration
 observer:
   replicas: 1
-
   image:
     repository: ghcr.io/openchoreo/observer
-    tag: ""  # If no value is set, use Chart.AppVersion
+    tag: ""  # defaults to Chart.AppVersion
     pullPolicy: IfNotPresent
-
   service:
     type: ClusterIP
     port: 8080
-
   logLevel: info
-
+  telemetry:
+    backend: clickstack
+    dualRead: true
+    dualSampleRate: 0.05
+  clickstack:
+    hosts:
+      - clickstack:9000
+    database: telemetry
+  openSearch:
+    address: http://opensearch:9200
+    username: admin
+    password: ThisIsTheOpenSearchPassword1
   resources:
     limits:
       cpu: 500m
@@ -157,85 +170,65 @@ observer:
       cpu: 100m
       memory: 128Mi
 
-  openSearchUsername: admin
-  openSearchPassword: ThisIsTheOpenSearchPassword1
+# Node-level OpenTelemetry collectors (data plane)
+collectors:
+  enabled: true
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.103.0"
+    pullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+    name: ""
+  nodeSelector: {}
+  tolerations:
+    - operator: Exists
+      effect: NoSchedule
+  otlp:
+    endpoint: "http://otlp-gateway:4318"
+    protocol: http
+    compression: gzip
+    tls:
+      enabled: false
+      secretName: ""
+      caFile: ca.crt
+      certFile: client.crt
+      keyFile: client.key
+  filelog:
+    include:
+      - /var/log/containers/*.log
+    exclude:
+      - /var/log/containers/*fluent-bit*.log
+    startAt: end
+  resources:
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
 
-# Fluent Bit configuration
+# Monitoring (Grafana dashboards + Prometheus alerts)
+monitoring:
+  dashboards:
+    enabled: true
+  alerts:
+    enabled: true
+    ingestionLagSeconds: 3
+    queryP95Seconds: 1
+    minCompressionRatio: 10
+  cost:
+    storagePerTbUsd: 0.5
+    queryPerSecondUsd: 0.0002
+
+# Legacy OpenSearch toggles kept for dual-read fallback
+openSearch:
+  enabled: false
+
+# Fluent Bit configuration (unchanged)
 fluentBit:
   enabled: false
-  config:
-    customParsers: |
-      [PARSER]
-          Name docker_no_time
-          Format json
-          Time_Keep Off
-          Time_Key time
-          Time_Format %Y-%m-%dT%H:%M:%S.%L
-
-    inputs: |
-      [INPUT]
-          Name tail
-          Buffer_Chunk_Size 32KB
-          Buffer_Max_Size 2MB
-          DB /var/lib/fluent-bit/db/tail-container-logs.db
-          Exclude_Path /var/log/containers/fluent-bit-*_openchoreo-observability-plane_*.log
-          Inotify_Watcher false
-          Mem_Buf_Limit 256MB
-          Path /var/log/containers/*.log
-          multiline.parser docker, cri
-          Read_from_Head On
-          Refresh_Interval 5
-          Skip_Long_Lines On
-          Tag kube.*
-
-    filters: |
-      [FILTER]
-          Name kubernetes
-          Buffer_Size 32MB
-          K8S-Logging.Parser On
-          K8S-Logging.Exclude On
-          Keep_Log On
-          Match kube.*
-          Merge_Log Off
-          tls.verify Off
-          Use_Kubelet true
-
-    outputs: |
-      [OUTPUT]
-          Name opensearch
-          Host opensearch
-          Generate_ID On
-          HTTP_Passwd admin
-          HTTP_User admin
-          Logstash_Format On
-          Logstash_DateFormat %Y-%m-%d
-          Logstash_Prefix container-logs
-          Match kube.*
-          Port 9200
-          Replace_Dots On
-          Suppress_Type_Name On
-          tls On
-          tls.verify Off
-
-  dnsPolicy: ClusterFirstWithHostNet
-  hostNetwork: true
-
-  extraVolumeMounts:
-  - name: db
-    mountPath: "/var/lib/fluent-bit/db"
-    readOnly: false
-  extraVolumes:
-    - name: db
-      hostPath:
-        path: /var/lib/fluent-bit/db
-        type: DirectoryOrCreate
-
-  fullnameOverride: "fluent-bit"
-  metricsPort: 2021
-
-  rbac:
-    nodeAccess: true
-
+  config: {}
   resources:
     limits:
       cpu: 200m
@@ -244,152 +237,55 @@ fluentBit:
       cpu: 100m
       memory: 128Mi
 
-  securityContext:
-    allowPrivilegeEscalation: false
-    capabilities:
-      drop:
-      - ALL
-    readOnlyRootFilesystem: true
-    runAsNonRoot: true
-    runAsUser: 10000
-
-  service:
-    port: 2021
-
-  testFramework:
-    enabled: false
-
-  initContainers:
-  - name: set-volume-ownership
-    image: busybox
-    command: ["sh", "-c", "chown -R 10000:10000 /var/lib/fluent-bit/db"]
-    resources:
-      limits:
-        cpu: 15m
-        memory: "32Mi"
-      requests:
-        cpu: 10m
-        memory: "24Mi"
-    securityContext:
-      capabilities:
-        drop:
-        - ALL
-      privileged: true
-      readOnlyRootFilesystem: true
-      runAsUser: 0
-    volumeMounts:
-    - name: db
-      mountPath: /var/lib/fluent-bit/db
-
-# Prometheus configuration
+# Prometheus stack configuration (unchanged default)
 prometheus:
   enabled: false
-  fullnameOverride: openchoreo-observability
 
-  ## Manages Prometheus and Alertmanager components
-  prometheusOperator:
-    enabled: true
-    fullnameOverride: prometheus-operator
+# Service Account configuration
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
 
-  ## Install Prometheus Operator CRDs
-  crds:
-    enabled: true
+# Migration tooling configuration for OpenSearch → ClickStack
+migration:
+  # Container image for migration jobs
+  image:
+    repository: alpine/k8s
+    tag: "1.28.7"
+    pullPolicy: IfNotPresent
 
-  ## Setting to produces cleaner resource names
-  cleanPrometheusOperatorObjectNames: true
-
-  ## Deploy a Prometheus instance (Prometheus Operator needs to be enabled for this to work)
-  prometheus:
-    enabled: true # This section needs to be further configured for Thanos backups, priorityClass etc.
-
-  ## Configuration for alertmanager
-  ## ref: https://prometheus.io/docs/alerting/alertmanager/
-  alertmanager:
+  # Shadow write enablement (dual-write to both OpenSearch and ClickStack)
+  shadowWrite:
     enabled: false
-    alertmanagerSpec:
-      podMetadata:
-        name: alertmanager
+    backoffLimit: 3
 
-  ## Configuration for grafana
-  # Values from https://github.com/grafana/helm-charts/blob/main/charts/grafana/values.yaml
-  grafana:
+  # Validation job to verify dual-write consistency
+  validation:
     enabled: false
-    fullnameOverride: grafana
-    adminUser: admin
-    adminPassword: admin
-    ## OpenChoreo Observability Plane does not ship default Grafana dashboards or datasources
-    ## OpenChoreo specific dashboards and datasources will be added separately
-    sidecar:
-      dashboards:
-        enabled: false
-      datasources:
-        enabled: false
-    defaultDashboardsEnabled: false
-    ## Datasources of OpenChoreo Observability Plane
-    datasources:
-      datasources.yaml:
-        apiVersion: 1
-        datasources:
-          - name: Prometheus
-            type: prometheus
-            access: proxy
-            url: http://openchoreo-observability-prometheus:9090
-            isDefault: true
+    # How long to validate data consistency (seconds)
+    durationSeconds: 3600
+    # How often to sample and compare counts (seconds)
+    sampleIntervalSeconds: 60
+    # Maximum acceptable drift per sample (%)
+    maxDriftPercent: 1.0
+    # Maximum acceptable overall drift rate (%)
+    maxOverallDriftPercent: 5.0
+    backoffLimit: 5
 
-  ## Flag to disable all the kubernetes component scrapers
-  kubernetesServiceMonitors:
-    enabled: true
-  ## Component scraping kube state metrics
-  kubeStateMetrics:
-    enabled: true # kubeStateMetrics service monitor needs to be custom defined
-  ## Configuration for kube-state-metrics subchart
-  kube-state-metrics:
-    fullnameOverride: kube-state-metrics
-    collectors:
-      - pods
-      # Jobs and Services to be added later
-    metricAllowlist:
-      - kube_pod_completion_time
-      - kube_pod_container_resource_limits
-      - kube_pod_container_resource_requests
-      - kube_pod_info
-      - kube_pod_init_container_resource_limits
-      - kube_pod_init_container_resource_requests
-      - kube_pod_labels
-      - kube_pod_start_time
-      - kube_pod_status_phase
-      # Jobs and Services to be added later
-    metricLabelsAllowlist:
-      - pods=[organization-name, project-name, component-name, environment-name]
-      # Jobs and Services to be added later
-
-  ## Configuration for thanosRuler
-  ## ref: https://thanos.io/tip/components/rule.md/
-  thanosRuler:
-    enabled: false # This section needs to be further configured for queryEndpoints etc.
-
-  ## Create default rules for monitoring the cluster
-  defaultRules:
-    create: false
-
-  ## Component scraping the kubelet and kubelet-hosted cAdvisor
-  ## Disable when cAdvisor ServiceMonitor is added
-  kubelet:
-    enabled: true
-
-  ## Openchoreo Observability is not meant for monitoring the kubernetes cluster
-  ## Hence, following kube components are disabled
-  kubeApiServer:
+  # OpenSearch cleanup job (removes legacy resources after migration)
+  cleanup:
     enabled: false
-  kubeControllerManager:
-    enabled: false
-  coreDns:
-    enabled: false
-  kubeEtcd:
-    enabled: false
-  kubeScheduler:
-    enabled: false
-  kubeProxy:
-    enabled: false
-  nodeExporter:
-    enabled: false
+    # Safety: require explicit confirmation flag
+    requireExplicitFlag: true
+    confirmed: false
+    # Archive indices before deletion
+    archiveIndices: true
+    backupLocation: "/backup/opensearch"
+    # What resources to delete
+    deleteStatefulSet: true
+    deletePVCs: false  # Keep PVCs for rollback window
+    deleteServices: true
+    deleteConfigMaps: true
+    deleteSecrets: false  # Keep secrets for potential rollback
+    backoffLimit: 2

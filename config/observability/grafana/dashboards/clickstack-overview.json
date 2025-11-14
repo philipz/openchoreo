@@ -1,0 +1,130 @@
+{
+  "title": "ClickStack Overview",
+  "uid": "clickstack-overview",
+  "timezone": "UTC",
+  "schemaVersion": 37,
+  "version": 1,
+  "tags": ["clickstack", "observability"],
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Ingestion Throughput (logs/sec)",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "clickstack:ingest_logs_per_sec",
+          "legendFormat": "Total",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (component_id) (rate(otelcol_receiver_accepted_log_records{receiver=\"filelog/containers\"}[5m]))",
+          "legendFormat": "{{component_id}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "green", "value": 1000}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "ClickStack Query p95 (seconds)",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(clickstack_query_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "red", "value": 1}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Monthly Storage Cost (USD)",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum(clickstack:storage_cost_usd)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Compression Ratio",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "avg(clickstack_compression_ratio)",
+          "legendFormat": "avg",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "orange", "value": 8},
+              {"color": "green", "value": 10}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 10, "x": 6, "y": 8}
+    },
+    {
+      "type": "table",
+      "title": "Cost per Project",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "clickstack:cost_per_project_usd",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"displayMode": "auto"},
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8}
+    }
+  ]
+}

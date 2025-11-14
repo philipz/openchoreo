@@ -1,0 +1,11 @@
+groups:
+- name: clickstack-alerts
+  rules:
+  - alert: ClickStackHighIngestionLag
+    expr: sum(rate(clickstack_ingestion_lag_seconds_bucket[5m])) by (job) > 60
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "ClickStack ingestion lag is high (instance {{ $labels.instance }})"
+      description: "ClickStack ingestion lag is exceeding 60 seconds for job {{ $labels.job }}."

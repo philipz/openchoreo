@@ -1,0 +1,52 @@
+{{- if and .Values.prometheus.enabled .Values.monitoring.alerts.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "openchoreo-observability-plane.fullname" . }}-clickstack
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "prometheus-rule") | nindent 4 }}
+spec:
+  groups:
+    - name: clickstack.recording
+      rules:
+        - record: clickstack:ingest_logs_per_sec
+          expr: sum(rate(otelcol_receiver_accepted_log_records{receiver="filelog/containers"}[5m]))
+        - record: clickstack:ingestion_lag_seconds
+          expr: max(otelcol_exporter_queue_size{service="otlp-gateway"})
+        - record: clickstack:storage_used_bytes
+          expr: sum(kubelet_volume_stats_used_bytes{persistentvolumeclaim=~"clickstack.*"})
+        - record: clickstack:storage_cost_usd
+          expr: (clickstack:storage_used_bytes / 1099511627776) * {{ .Values.monitoring.cost.storagePerTbUsd | default 0.5 }}
+        - record: clickstack:query_cost_usd
+          expr: sum(rate(clickstack_query_duration_seconds_sum[5m])) * {{ .Values.monitoring.cost.queryPerSecondUsd | default 0.0002 }}
+        - record: clickstack:cost_per_project_usd
+          expr: sum by (project_id) ((clickstack:storage_cost_usd + clickstack:query_cost_usd) * on(project_id) group_left() (project_id))
+    - name: clickstack.alerts
+      rules:
+        - alert: ClickStackIngestionLagHigh
+          expr: clickstack:ingestion_lag_seconds > {{ .Values.monitoring.alerts.ingestionLagSeconds | default 3 }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ClickStack ingestion lag high"
+            description: "Ingestion lag has exceeded {{ .Values.monitoring.alerts.ingestionLagSeconds | default 3 }} seconds for more than 5 minutes."
+        - alert: ClickStackQueryLatencyHigh
+          expr: histogram_quantile(0.95, sum(rate(clickstack_query_duration_seconds_bucket[5m])) by (le)) > {{ .Values.monitoring.alerts.queryP95Seconds | default 1 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ClickStack query p95 latency high"
+            description: "ClickStack query p95 latency has been above {{ .Values.monitoring.alerts.queryP95Seconds | default 1 }}s for 10m."
+        - alert: ClickStackCompressionLow
+          expr: avg(clickstack_compression_ratio) < {{ .Values.monitoring.alerts.minCompressionRatio | default 10 }}
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ClickStack compression ratio degraded"
+            description: "Average compression ratio dropped below {{ .Values.monitoring.alerts.minCompressionRatio | default 10 }}."
+{{- end }}

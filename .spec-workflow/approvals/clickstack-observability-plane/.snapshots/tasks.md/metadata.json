@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/specs/clickstack-observability-plane/tasks.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-13T15:43:47.030Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763048627024_9chqq3xup",
+      "approvalTitle": "ClickStack observability tasks"
+    }
+  ]
+}

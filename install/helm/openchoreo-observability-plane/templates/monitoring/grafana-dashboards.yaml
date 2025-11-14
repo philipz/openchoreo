@@ -1,0 +1,17 @@
+{{- if and .Values.monitoring.dashboards.enabled ( .Files.Glob "config/observability/grafana/dashboards/*.json" ) }}
+{{- $files := .Files.Glob "config/observability/grafana/dashboards/*.json" }}
+{{- range $path, $file := $files }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openchoreo-observability-plane.fullname" $ }}-{{ replace (base $path) "." "-" }}-dashboard
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" $ "component" "grafana-dashboard") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  {{ base $path }}: |
+{{ $file | indent 4 }}
+{{- end }}
+{{- end }}
