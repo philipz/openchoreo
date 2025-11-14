@@ -41,6 +41,14 @@ kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=clickstack
   -n "$NAMESPACE" --timeout=2m
 
 echo ""
+echo "Step 3b: Verify HyperDX + MongoDB"
+kubectl get deploy/hyperdx -n "$NAMESPACE"
+kubectl rollout status deploy/hyperdx -n "$NAMESPACE" --timeout=2m
+if kubectl get statefulset/hyperdx-mongodb -n "$NAMESPACE" >/dev/null 2>&1; then
+  kubectl rollout status statefulset/hyperdx-mongodb -n "$NAMESPACE" --timeout=3m
+fi
+
+echo ""
 echo "Step 4: Enable shadow write (simulation)"
 echo "Upgrading with migration.shadowWrite.enabled=true"
 helm upgrade openchoreo-obs-test "$CHART_PATH" \

@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/specs/hyperdx-enablement/requirements.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-14T14:30:31.637Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763130631617_23e4wg59i",
+      "approvalTitle": "HyperDX enablement requirements"
+    }
+  ]
+}

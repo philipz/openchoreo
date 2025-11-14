@@ -116,7 +116,7 @@ gateway:
   config:
     exporters:
       clickhouse:
-        endpoint: "clickstack:9000"
+        endpoint: "tcp://clickstack:9000?dial_timeout=10s"
         database: telemetry
         username: "${env:CLICKSTACK_USERNAME}"
         password: "${env:CLICKSTACK_PASSWORD}"
@@ -154,20 +154,88 @@ gateway:
 # HyperDX UI deployment
 hyperdx:
   enabled: true
+  replicas: 1
   image:
     repository: hyperdx/hyperdx
     tag: "latest"
     pullPolicy: IfNotPresent
-  replicas: 1
+  podLabels: {}
+  podAnnotations: {}
   service:
     type: ClusterIP
     port: 3000
+    annotations: {}
   env:
     CLICKHOUSE_HOST: clickstack
     CLICKHOUSE_PORT: "9000"
     CLICKHOUSE_DATABASE: telemetry
     # Optional: set to a real API key to enable HyperDX-managed OpenTelemetry without warnings
     HYPERDX_API_KEY: ""
+  extraEnv: []
+  clickhouse:
+    host: clickstack
+    port: 9000
+    database: telemetry
+    credentialsSecret:
+      name: clickstack-credentials
+      usernameKey: username
+      passwordKey: password
+  otlp:
+    httpEndpoint: http://otlp-gateway:4318
+  dependencyChecks:
+    enabled: true
+    image: busybox:1.36
+    pullPolicy: IfNotPresent
+    timeoutSeconds: 5
+    retries: 60
+    endpoints:
+      - name: clickhouse
+        host: clickstack
+        port: 9000
+      - name: otlp-http
+        host: otlp-gateway
+        port: 4318
+      - name: mongodb
+        host: hyperdx-mongodb
+        port: 27017
+  mongodb:
+    enabled: true
+    secretName: hyperdx-mongodb
+    connection:
+      externalUri: ""
+      existingSecret: ""
+      key: uri
+      database: hyperdx
+      params: ""
+    auth:
+      enabled: false
+      username: hyperdx
+      password: KindHyperDXMongoP@55
+      existingSecret: ""
+      usernameKey: username
+      passwordKey: password
+    image:
+      repository: mongo
+      tag: "7.0.12"
+      pullPolicy: IfNotPresent
+    service:
+      port: 27017
+    replicaCount: 1
+    podLabels: {}
+    podAnnotations: {}
+    persistence:
+      enabled: false
+      accessModes:
+        - ReadWriteOnce
+      size: 10Gi
+      storageClass: ""
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
   signing:
     key: ""
     ttl: 15m
@@ -193,7 +261,7 @@ observer:
   logLevel: info
   telemetry:
     backend: clickstack
-    dualRead: true
+    dualRead: false
     dualSampleRate: 0.05
   clickstack:
     hosts:
@@ -265,6 +333,25 @@ monitoring:
 # Legacy OpenSearch toggles kept for dual-read fallback
 openSearch:
   enabled: false
+
+openSearchCluster:
+  enabled: false
+  adminUsername: admin
+  adminUserPassword: ThisIsTheOpenSearchPassword1
+  internalUsers: |
+    ---
+    admin:
+      hash: %s
+      reserved: true
+      backend_roles:
+        - admin
+      description: "Default OpenChoreo admin"
+
+openSearchClusterSetup:
+  image:
+    repository: alpine/k8s
+    tag: "1.28.7"
+    pullPolicy: IfNotPresent
 
 # Fluent Bit configuration (unchanged)
 fluentBit:

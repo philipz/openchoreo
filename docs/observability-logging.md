@@ -28,15 +28,32 @@ Important values:
 | `clickstack.*` | ClickHouse StatefulSet sizing, TLS, credentials |
 | `gateway.*` | OTLP gateway (OpenTelemetry Collector) ingress |
 | `hyperdx.*` | HyperDX UI configuration + signing secret |
+| `openSearchCluster.*` | Legacy OpenSearch automation toggles (default disabled) |
 | `collectors.*` | Node-level OTLP collectors (enabled by default) |
 | `monitoring.*` | Prometheus alerts and Grafana dashboards for ClickStack metrics/cost |
 
 ### Local testing helper
-For quick validation against a Kind cluster with `kubectl` access:
+Spin up (or reuse) the Kind cluster via `make kind` and then run:
 ```bash
-make deploy-observability
+make kind.deploy-observability-plane CLICKSTACK_PASSWORD=<strong-password>
 ```
-This command applies the reusable OTLP collector kustomization located at `config/observability/collectors/otel/base`.
+The helper now:
+
+- Ensures Cilium is present and reuses the KinD control-plane DNS/CNI tweaks from `install/dev/kind.sh` (no more CoreDNS deletion).
+- Deploys the Helm chart in `minimal` mode with **HyperDX + MongoDB enabled by default**. A lightweight MongoDB StatefulSet (`hyperdx-mongodb`) is installed for local runs; provide `HYPERDX_ENABLED=false` if you want to skip the UI entirely.
+- Forces `observer.telemetry.dualRead=false` and `openSearch.*=false` so the observer never attempts to resolve the legacy OpenSearch service.
+- Prints a summary with ready checks plus the commands for port-forwarding HyperDX (`kubectl port-forward -n openchoreo-observability-plane svc/hyperdx 3000:3000`), viewing OTLP gateway logs, and checking MongoDB.
+
+Environment knobs:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CLICKSTACK_PASSWORD` | `KindClickStackP@55w0rd` | Admin password for the ClickHouse cluster |
+| `HYPERDX_ENABLED` | `true` | Toggle HyperDX + MongoDB deployment |
+| `HYPERDX_SIGNING_KEY` | `kind-hdx-signing-secret` | Secret for `/api/hyperdx/link` signatures |
+| `HELM_CACHE_HOME` et al. | `/tmp/helm*` | Override Helm cache directories when sandboxed |
+
+The legacy `make deploy-observability` target still applies only the node-level OTLP collectors and is kept for backwards compatibility tests.
 
 ---
 
@@ -112,7 +129,40 @@ Behind the scenes the observer service aggregates telemetry using ClickStack SQL
 
 ---
 
-## 6. Migration Checklist (OpenSearch → ClickStack)
+## 6. Inspect Greeter telemetry in HyperDX
+
+After following [Deploy your first component](https://openchoreo.dev/docs/getting-started/deploy-first-component/) the Greeter workload emits OTLP spans/logs. Use these steps to confirm the data lands in ClickStack + HyperDX:
+
+1. **Confirm collectors and gateway see Greeter traffic**
+   ```bash
+   kubectl logs -n openchoreo-observability-plane deploy/otlp-gateway | grep greeter || true
+   kubectl logs -n openchoreo-observability-plane ds/otel-collector | grep greeter || true
+   ```
+   A healthy pipeline shows HTTP 200 ingest logs plus `k8s.namespace.name=dp-...-greeter`. If nothing appears, check that the Greeter workload exports OTLP to `otlp-gateway.openchoreo-observability-plane.svc.cluster.local:4317`.
+
+2. **Port-forward HyperDX** (if not already running via the Kind helper summary):
+   ```bash
+   kubectl port-forward -n openchoreo-observability-plane svc/hyperdx 3000:3000
+   open http://localhost:3000
+   ```
+
+3. **View Logs** – In HyperDX, open *Search → Logs* and add filters:
+   - `resourceAttributes.k8s.namespace.name` equals your Greeter namespace (`dp-default-default-development-...`).
+   - `service.name` equals `greeter` (or the OTLP service name you configured).
+   The collector changes now preserve the original log body, so you should see the `message` and `attributes.component.id` fields inline.
+
+4. **View Traces** – Switch to *Traces* and filter by `service.name=greeter`. The OTLP gateway automatically writes spans into `telemetry.traces_mv`; HyperDX surfaces them through the default trace explorer.
+
+5. **Metrics / Health** – Use Grafana (`config/observability/grafana/dashboards`) or click `Alerts` inside HyperDX to confirm ingestion lag < 3s and that ClickStack’s RED metrics stay green.
+
+6. **Live troubleshooting** – For quick CLI checks you can query ClickHouse directly:
+   ```bash
+   kubectl exec -n openchoreo-observability-plane statefulset/clickstack -- \
+     clickhouse-client --query "SELECT count() FROM telemetry.logs_mv WHERE namespace='dp-default-default-development' AND service='greeter' AND timestamp > now() - INTERVAL 15 MINUTE"
+   ```
+   To automate the health sweep, run `scripts/verify-hyperdx.sh --data-namespace dp-default-default-development` – it inspects pod status, OTLP gateway logs, and optional ClickHouse counts in a single command.
+
+## 7. Migration Checklist (OpenSearch → ClickStack)
 
 1. Deploy ClickStack plane (Section 1).
 2. Enable dual-write in observer via `observer.telemetry.dualRead=true` until parity confirmed.

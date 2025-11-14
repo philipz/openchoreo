@@ -1,0 +1,123 @@
+{{- if and .Values.hyperdx.enabled .Values.hyperdx.mongodb.enabled }}
+{{- $mongoSecretName := include "openchoreo-observability-plane.hyperdxMongoSecretName" . -}}
+{{- $mongoURI := include "openchoreo-observability-plane.hyperdxMongoURI" . -}}
+{{- $createSecret := not .Values.hyperdx.mongodb.connection.existingSecret -}}
+{{- if and $createSecret $mongoURI }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $mongoSecretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "hyperdx-mongodb") | nindent 4 }}
+type: Opaque
+stringData:
+  uri: {{ $mongoURI | quote }}
+  database: {{ default "hyperdx" .Values.hyperdx.mongodb.connection.database | quote }}
+  host: {{ printf "hyperdx-mongodb" | quote }}
+  port: {{ default 27017 .Values.hyperdx.mongodb.service.port | quote }}
+  {{- if .Values.hyperdx.mongodb.auth.enabled }}
+  username: {{ .Values.hyperdx.mongodb.auth.username | default "hyperdx" | quote }}
+  password: {{ .Values.hyperdx.mongodb.auth.password | default "KindHyperDXMongoP@55" | quote }}
+  {{- end }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hyperdx-mongodb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "hyperdx-mongodb") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "hyperdx-mongodb") | nindent 4 }}
+  ports:
+    - name: mongo
+      port: {{ .Values.hyperdx.mongodb.service.port | default 27017 }}
+      targetPort: mongo
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hyperdx-mongodb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "hyperdx-mongodb") | nindent 4 }}
+spec:
+  serviceName: hyperdx-mongodb
+  replicas: {{ .Values.hyperdx.mongodb.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "hyperdx-mongodb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "hyperdx-mongodb") | nindent 8 }}
+        {{- with .Values.hyperdx.mongodb.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.hyperdx.mongodb.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1001
+      containers:
+        - name: mongodb
+          image: "{{ .Values.hyperdx.mongodb.image.repository }}:{{ .Values.hyperdx.mongodb.image.tag }}"
+          imagePullPolicy: {{ .Values.hyperdx.mongodb.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              set -euo pipefail
+              exec mongod --bind_ip_all --wiredTigerCacheSizeGB=0.25
+          ports:
+            - containerPort: {{ .Values.hyperdx.mongodb.service.port | default 27017 }}
+              name: mongo
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.hyperdx.mongodb.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+      {{- if .Values.hyperdx.mongodb.persistence.enabled }}
+      volumeClaimTemplates:
+        - metadata:
+            name: data
+          spec:
+            accessModes: {{ toYaml .Values.hyperdx.mongodb.persistence.accessModes | nindent 12 }}
+            {{- if .Values.hyperdx.mongodb.persistence.storageClass }}
+            storageClassName: {{ .Values.hyperdx.mongodb.persistence.storageClass }}
+            {{- end }}
+            resources:
+              requests:
+                storage: {{ .Values.hyperdx.mongodb.persistence.size | default "10Gi" }}
+      {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+{{- end }}

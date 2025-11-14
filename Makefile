@@ -23,3 +23,7 @@ deploy-observability: ## Deploy OTLP collector DaemonSet and config to the curre
 	@kubectl create namespace $(OBSERVABILITY_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 	@$(call log_info, Applying OpenTelemetry collector manifests...)
 	kubectl apply -k config/observability/collectors/otel/base
+
+.PHONY: kind.deploy-observability-plane
+kind.deploy-observability-plane: ## Install ClickStack observability plane on local Kind (set HYPERDX_ENABLED=false to skip HyperDX)
+	@hack/deploy-clickstack-kind.sh

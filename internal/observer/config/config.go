@@ -281,7 +281,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("invalid server port: %d", c.Server.Port)
 	}
 
-	if c.OpenSearch.Address == "" {
+	needsOpenSearch := !strings.EqualFold(c.Telemetry.Backend, "clickstack") || c.Telemetry.DualRead
+	if needsOpenSearch && c.OpenSearch.Address == "" {
 		return fmt.Errorf("opensearch address is required")
 	}
 

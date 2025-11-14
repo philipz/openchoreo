@@ -1,0 +1,14 @@
+{
+  "filePath": ".spec-workflow/specs/hyperdx-enablement/tasks.md",
+  "currentVersion": 1,
+  "snapshots": [
+    {
+      "version": 1,
+      "filename": "snapshot-001.json",
+      "timestamp": "2025-11-14T14:40:14.597Z",
+      "trigger": "initial",
+      "approvalId": "approval_1763131214587_lnxklkhn2",
+      "approvalTitle": "HyperDX enablement tasks"
+    }
+  ]
+}

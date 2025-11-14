@@ -157,3 +157,40 @@ Evaluate ClickStack PVC size
 {{- default "200Gi" .Values.clickstack.storage.size -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Return the secret name used for HyperDX MongoDB connection details.
+Allows overriding via hyperdx.mongodb.connection.existingSecret.
+*/}}
+{{- define "openchoreo-observability-plane.hyperdxMongoSecretName" -}}
+{{- if .Values.hyperdx.mongodb.connection.existingSecret -}}
+{{- .Values.hyperdx.mongodb.connection.existingSecret -}}
+{{- else -}}
+{{- default "hyperdx-mongodb" .Values.hyperdx.mongodb.secretName -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Computes the default MongoDB connection URI for HyperDX when the chart
+manages the MongoDB StatefulSet.
+*/}}
+{{- define "openchoreo-observability-plane.hyperdxMongoURI" -}}
+{{- $conn := .Values.hyperdx.mongodb.connection -}}
+{{- if $conn.externalUri -}}
+{{- $conn.externalUri -}}
+{{- else if not .Values.hyperdx.mongodb.enabled -}}
+{{- "" -}}
+{{- else -}}
+{{- $host := "hyperdx-mongodb" -}}
+{{- $port := default 27017 .Values.hyperdx.mongodb.service.port -}}
+{{- $database := default "hyperdx" $conn.database -}}
+{{- $params := default "" $conn.params -}}
+{{- if .Values.hyperdx.mongodb.auth.enabled -}}
+{{- $username := default "hyperdx" .Values.hyperdx.mongodb.auth.username -}}
+{{- $password := default "" .Values.hyperdx.mongodb.auth.password -}}
+{{- printf "mongodb://%s:%s@%s:%v/%s%s" $username $password $host $port $database $params -}}
+{{- else -}}
+{{- printf "mongodb://%s:%v/%s%s" $host $port $database $params -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

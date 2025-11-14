@@ -16,12 +16,26 @@ data:
         operators:
           - type: move
             from: body
-            to: attributes.message
+            to: attributes.log_raw
           - type: json_parser
-            parse_from: attributes.message
-            if: 'attributes["message"] matches "^\\s*{.*}\\s*$"'
+            parse_from: attributes.log_raw
+            if: 'attributes["log_raw"] matches "^\\s*{.*}\\s*$"'
+          - type: move
+            from: attributes.log
+            to: body
+            if: 'attributes["log"] != nil'
+          - type: move
+            from: attributes.message
+            to: body
+            if: 'attributes["log"] == nil and attributes["message"] != nil'
           - type: remove
-            field: attributes.message
+            field: attributes.log_raw
+          - type: remove
+            field: attributes.log
+      otlp:
+        protocols:
+          grpc:
+          http:
     processors:
       memory_limiter:
         check_interval: 5s
@@ -33,6 +47,22 @@ data:
       k8sattributes:
         auth_type: serviceAccount
         passthrough: false
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+              - from: resource_attribute
+                name: k8s.namespace.name
+          - sources:
+              - from: attributes
+                name: k8s.pod.name
+              - from: attributes
+                name: k8s.namespace.name
+          - sources:
+              - from: connection
         extract:
           metadata:
             - k8s.pod.name
@@ -69,12 +99,32 @@ data:
       otlphttp/clickstack:
         endpoint: http://otlp-gateway.openchoreo-observability-plane.svc.cluster.local:4318
         compression: gzip
+        timeout: 30s
+        retry_on_failure:
+          enabled: true
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          num_consumers: 4
+          queue_size: 5120
     service:
       telemetry:
         logs:
           level: info
       pipelines:
-        logs:
+        logs/containers:
           receivers: [filelog/containers]
           processors: [memory_limiter, k8sattributes, attributes/promote, batch]
+          exporters: [otlphttp/clickstack]
+        logs/otlp:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, attributes/promote, batch]
+          exporters: [otlphttp/clickstack]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/clickstack]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
           exporters: [otlphttp/clickstack]

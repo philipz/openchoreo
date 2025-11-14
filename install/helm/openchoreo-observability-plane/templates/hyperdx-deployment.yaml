@@ -1,4 +1,15 @@
 {{- if .Values.hyperdx.enabled }}
+{{- $clickhouseHost := coalesce .Values.hyperdx.env.CLICKHOUSE_HOST .Values.hyperdx.clickhouse.host "clickstack" -}}
+{{- $clickhousePort := coalesce .Values.hyperdx.env.CLICKHOUSE_PORT (printf "%v" (default 9000 .Values.hyperdx.clickhouse.port)) "9000" -}}
+{{- $clickhouseDatabase := coalesce .Values.hyperdx.env.CLICKHOUSE_DATABASE .Values.hyperdx.clickhouse.database "telemetry" -}}
+{{- $clickhouseSecret := .Values.hyperdx.clickhouse.credentialsSecret.name | default "clickstack-credentials" -}}
+{{- $clickhouseUsernameKey := .Values.hyperdx.clickhouse.credentialsSecret.usernameKey | default "username" -}}
+{{- $clickhousePasswordKey := .Values.hyperdx.clickhouse.credentialsSecret.passwordKey | default "password" -}}
+{{- $mongoSecretName := include "openchoreo-observability-plane.hyperdxMongoSecretName" . -}}
+{{- $mongoSecretKey := .Values.hyperdx.mongodb.connection.key | default "uri" -}}
+{{- $mongoEnvEnabled := or .Values.hyperdx.mongodb.enabled (not (empty .Values.hyperdx.mongodb.connection.externalUri)) (not (empty .Values.hyperdx.mongodb.connection.existingSecret)) -}}
+{{- $otlpEndpoint := .Values.hyperdx.otlp.httpEndpoint | default "http://otlp-gateway:4318" -}}
+{{- $depChecks := .Values.hyperdx.dependencyChecks -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -16,31 +27,99 @@ spec:
     metadata:
       labels:
         {{- include "openchoreo-observability-plane.componentSelectorLabels" (dict "context" . "component" "hyperdx") | nindent 8 }}
+        {{- with .Values.hyperdx.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.hyperdx.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
+      {{- if and $depChecks.enabled (gt (len (default (list) $depChecks.endpoints)) 0) }}
+      initContainers:
+        - name: wait-for-dependencies
+          image: {{ $depChecks.image | default "busybox:1.36" | quote }}
+          imagePullPolicy: {{ $depChecks.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+              echo "Waiting for dependent services..."
+              endpoints=(
+              {{- range $idx, $ep := $depChecks.endpoints }}
+                "{{ $ep.name | default (printf "endpoint-%d" $idx) }}:{{ $ep.host }}:{{ $ep.port }}"
+              {{- end }}
+              )
+              for entry in "${endpoints[@]}"; do
+                name="${entry%%:*}"
+                rest="${entry#*:}"
+                host="${rest%%:*}"
+                port="${rest##*:}"
+                attempt=0
+                until nc -z "$host" "$port"; do
+                  attempt=$((attempt+1))
+                  if [ $attempt -ge {{ $depChecks.retries | default 60 }} ]; then
+                    echo "Timeout waiting for $name ($host:$port)"
+                    exit 1
+                  fi
+                  sleep {{ $depChecks.timeoutSeconds | default 5 }}
+                done
+                echo "$name is reachable"
+              done
+      {{- end }}
       containers:
         - name: hyperdx
           image: "{{ .Values.hyperdx.image.repository }}:{{ .Values.hyperdx.image.tag }}"
           imagePullPolicy: {{ .Values.hyperdx.image.pullPolicy | default "IfNotPresent" }}
           env:
             - name: CLICKHOUSE_HOST
-              value: {{ .Values.hyperdx.env.CLICKHOUSE_HOST | default "clickstack" | quote }}
+              value: {{ $clickhouseHost | quote }}
             - name: CLICKHOUSE_PORT
-              value: {{ .Values.hyperdx.env.CLICKHOUSE_PORT | default "9000" | quote }}
+              value: {{ $clickhousePort | quote }}
             - name: CLICKHOUSE_DATABASE
-              value: {{ .Values.hyperdx.env.CLICKHOUSE_DATABASE | default "telemetry" | quote }}
+              value: {{ $clickhouseDatabase | quote }}
             - name: CLICKHOUSE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: clickstack-credentials
-                  key: username
+                  name: {{ $clickhouseSecret }}
+                  key: {{ $clickhouseUsernameKey }}
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: clickstack-credentials
-                  key: password
+                  name: {{ $clickhouseSecret }}
+                  key: {{ $clickhousePasswordKey }}
+            {{- if $mongoEnvEnabled }}
+            - name: MONGO_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mongoSecretName }}
+                  key: {{ $mongoSecretKey }}
+            {{- end }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $otlpEndpoint | quote }}
             {{- if .Values.hyperdx.env.HYPERDX_API_KEY }}
             - name: HYPERDX_API_KEY
               value: {{ .Values.hyperdx.env.HYPERDX_API_KEY | quote }}
+            {{- end }}
+            {{- $extraEnv := .Values.hyperdx.extraEnv }}
+            {{- if $extraEnv }}
+              {{- if kindIs "map" $extraEnv }}
+                {{- range $key, $value := $extraEnv }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+                {{- end }}
+              {{- else if kindIs "slice" $extraEnv }}
+                {{- range $extraEnv }}
+            - name: {{ .name }}
+              {{- if .valueFrom }}
+              valueFrom:
+{{ toYaml .valueFrom | nindent 14 }}
+              {{- else }}
+              value: {{ .value | quote }}
+              {{- end }}
+                {{- end }}
+              {{- end }}
             {{- end }}
           ports:
             - containerPort: {{ .Values.hyperdx.service.port | default 3000 }}
@@ -57,6 +136,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "openchoreo-observability-plane.componentLabels" (dict "context" . "component" "hyperdx") | nindent 4 }}
+  {{- with .Values.hyperdx.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.hyperdx.service.type | default "ClusterIP" }}
   selector:

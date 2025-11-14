@@ -102,6 +102,7 @@ var _ = Describe("ClickStack Observability Plane", Ordered, func() {
 		}
 
 		waitForStatefulSetReady("clickstack", 1)
+		waitForStatefulSetReady("hyperdx-mongodb", 1)
 		waitForDeploymentReady("otlp-gateway", 1)
 		waitForDeploymentReady("observer", 1)
 		waitForDeploymentReady("hyperdx", 1)

@@ -22,6 +22,11 @@ spec:
           image: otel/opentelemetry-collector-contrib:0.103.0
           imagePullPolicy: IfNotPresent
           args: ["--config=/conf/collector.yaml"]
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
           env:
             - name: K8S_NODE_NAME
               valueFrom:
