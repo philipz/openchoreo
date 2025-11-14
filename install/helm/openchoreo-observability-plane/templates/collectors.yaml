@@ -73,7 +73,7 @@ data:
           - type: move
             from: body
             to: attributes.message
-          - type: parse_json
+          - type: json_parser
             parse_from: attributes.message
             if: 'attributes["message"] matches "^\\s*{.*}\\s*$"'
           - type: remove

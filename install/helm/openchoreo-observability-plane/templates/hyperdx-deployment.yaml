@@ -38,6 +38,10 @@ spec:
                 secretKeyRef:
                   name: clickstack-credentials
                   key: password
+            {{- if .Values.hyperdx.env.HYPERDX_API_KEY }}
+            - name: HYPERDX_API_KEY
+              value: {{ .Values.hyperdx.env.HYPERDX_API_KEY | quote }}
+            {{- end }}
           ports:
             - containerPort: {{ .Values.hyperdx.service.port | default 3000 }}
               name: http

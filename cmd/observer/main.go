@@ -44,10 +44,18 @@ func main() {
 	logger := initLogger(cfg.LogLevel)
 	logger.Info("Configuration loaded successfully", "log_level", cfg.LogLevel)
 
-	// Initialize OpenSearch client
-	osClient, err := opensearch.NewClient(&cfg.OpenSearch, logger)
-	if err != nil {
-		log.Fatalf("Failed to initialize OpenSearch client: %v", err)
+	// Initialize OpenSearch client only when needed. For ClickStack-only mode without
+	// dual-read, we skip connecting to OpenSearch entirely so the service can run
+	// without a legacy cluster.
+	var osClient *opensearch.Client
+	needsOpenSearch := !strings.EqualFold(cfg.Telemetry.Backend, "clickstack") || cfg.Telemetry.DualRead
+	if needsOpenSearch {
+		osClient, err = opensearch.NewClient(&cfg.OpenSearch, logger)
+		if err != nil {
+			log.Fatalf("Failed to initialize OpenSearch client: %v", err)
+		}
+	} else {
+		logger.Info("Skipping OpenSearch client initialization", "reason", "clickstack-only backend")
 	}
 
 	// Initialize ClickStack storage if required

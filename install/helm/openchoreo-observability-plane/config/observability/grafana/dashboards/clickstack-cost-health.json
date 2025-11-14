@@ -1,0 +1,92 @@
+{
+  "title": "ClickStack Cost & Health",
+  "uid": "clickstack-cost-health",
+  "schemaVersion": 37,
+  "version": 1,
+  "timezone": "UTC",
+  "tags": ["clickstack", "finops"],
+  "refresh": "1m",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total Cost (USD)",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum(clickstack:storage_cost_usd + clickstack:query_cost_usd)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Query Cost Breakdown",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "clickstack:query_cost_usd",
+          "legendFormat": "{{component_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": {"h": 6, "w": 12, "x": 6, "y": 0}
+    },
+    {
+      "type": "table",
+      "title": "Per Project Cost (USD)",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "clickstack:cost_per_project_usd",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingestion Lag (seconds)",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "clickstack:ingestion_lag_seconds",
+          "legendFormat": "{{component_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "red", "value": 3}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6}
+    }
+  ]
+}

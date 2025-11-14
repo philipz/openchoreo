@@ -67,9 +67,13 @@ spec:
         - name: TELEMETRY_BACKEND
           value: {{ .Values.observer.telemetry.backend | default "clickstack" | quote }}
         - name: TELEMETRY_DUAL_READ
-          value: {{ ternary "true" "false" (.Values.observer.telemetry.dualRead | default true) | quote }}
+          {{- if hasKey .Values.observer.telemetry "dualRead" }}
+          value: {{ ternary "true" "false" (.Values.observer.telemetry.dualRead) | quote }}
+          {{- else }}
+          value: "true"
+          {{- end }}
         - name: TELEMETRY_DUAL_SAMPLE_RATE
-          value: "{{ .Values.observer.telemetry.dualSampleRate | default 0.05 }}"
+          value: "{{ default 0.05 .Values.observer.telemetry.dualSampleRate }}"
         - name: CLICKSTACK_HOSTS
           value: "{{ join "," (default (list "clickstack:9000") .Values.observer.clickstack.hosts) }}"
         - name: CLICKSTACK_DATABASE

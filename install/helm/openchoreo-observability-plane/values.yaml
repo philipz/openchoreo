@@ -37,8 +37,10 @@ clickstack:
   initSQL:
     enabled: true
     schema: |
+      SET allow_experimental_object_type = 1;
       CREATE DATABASE IF NOT EXISTS telemetry;
       CREATE TABLE IF NOT EXISTS telemetry.logs_mv (
+        organization_id String,
         timestamp DateTime64(9),
         log String,
         log_level String,
@@ -127,6 +129,8 @@ hyperdx:
     CLICKHOUSE_HOST: clickstack
     CLICKHOUSE_PORT: "9000"
     CLICKHOUSE_DATABASE: telemetry
+    # Optional: set to a real API key to enable HyperDX-managed OpenTelemetry without warnings
+    HYPERDX_API_KEY: ""
   signing:
     key: ""
     ttl: 15m
